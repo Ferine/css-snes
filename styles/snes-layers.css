@@ -1,204 +1,408 @@
-* {
+/* ═══════════════════════════════════════════════════════════════
+   CSS-SNES — "CRT Console Lab" Theme
+   Retro-futuristic SNES workbench aesthetic
+   ═══════════════════════════════════════════════════════════════ */
+
+/* ── Design tokens ───────────────────────────────────────────── */
+:root {
+  /* Surface palette — SNES console grays + deep indigo */
+  --bg-deep:       #0b0b14;
+  --bg-surface:    #12121f;
+  --bg-raised:     #1a1a2d;
+  --bg-panel:      #21213a;
+  --bg-hover:      #2c2c4a;
+  --border-subtle: #2a2a48;
+  --border-mid:    #3a3a60;
+
+  /* Accent palette — CRT phosphor + SNES purple */
+  --accent-green:  #39ff8f;
+  --accent-cyan:   #5bffe3;
+  --accent-purple: #a78bfa;
+  --accent-amber:  #fbbf24;
+  --accent-red:    #ff6b81;
+  --accent-blue:   #6bb5ff;
+
+  /* Text */
+  --text-primary:  #d4d4e8;
+  --text-muted:    #7a7a9e;
+  --text-dim:      #4e4e72;
+
+  /* Fonts */
+  --font-display:  'Orbitron', sans-serif;
+  --font-mono:     'Share Tech Mono', 'Courier New', monospace;
+
+  /* CRT dimensions */
+  --screen-w:  256px;
+  --screen-h:  224px;
+  --scale:     3;
+  --scaled-w:  768px;  /* 256 × 3 */
+  --scaled-h:  672px;  /* 224 × 3 */
+  --bezel-pad: 18px;
+}
+
+/* ── Reset ───────────────────────────────────────────────────── */
+*, *::before, *::after {
   margin: 0;
   padding: 0;
   box-sizing: border-box;
 }
 
+/* ── Body ────────────────────────────────────────────────────── */
 body {
-  background: #1a1a2e;
-  color: #e0e0e0;
-  font-family: 'Courier New', monospace;
+  background: var(--bg-deep);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
   display: flex;
   flex-direction: column;
   align-items: center;
   min-height: 100vh;
-  padding: 20px;
+  padding: 0 20px 24px;
+
+  /* Subtle radial vignette */
+  background-image:
+    radial-gradient(ellipse 80% 60% at 50% 30%, rgba(167,139,250,0.04) 0%, transparent 70%),
+    radial-gradient(ellipse 60% 80% at 50% 100%, rgba(57,255,143,0.02) 0%, transparent 60%);
 }
 
-h1 {
-  font-size: 1.2rem;
-  margin-bottom: 12px;
-  color: #7fdbca;
+/* ── Top bar ─────────────────────────────────────────────────── */
+.top-bar {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  width: 100%;
+  max-width: 1100px;
+  padding: 14px 0 12px;
+  border-bottom: 1px solid var(--border-subtle);
+  margin-bottom: 20px;
+  flex-wrap: wrap;
 }
 
-/* ── Toolbar ──────────────────────────────────────────────────── */
+.logo {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  flex-shrink: 0;
+}
 
+.logo-icon {
+  color: var(--accent-green);
+  font-size: 0.65rem;
+  align-self: center;
+  animation: pulse-glow 3s ease-in-out infinite;
+}
+
+@keyframes pulse-glow {
+  0%, 100% { opacity: 0.5; text-shadow: none; }
+  50%      { opacity: 1; text-shadow: 0 0 8px var(--accent-green); }
+}
+
+.logo h1 {
+  font-family: var(--font-display);
+  font-size: 1.15rem;
+  font-weight: 900;
+  letter-spacing: 0.12em;
+  color: var(--text-primary);
+  line-height: 1;
+}
+
+.logo-sep {
+  color: var(--accent-purple);
+  margin: 0 1px;
+}
+
+.logo-sub {
+  font-family: var(--font-mono);
+  font-size: 0.6rem;
+  color: var(--text-dim);
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  align-self: center;
+  margin-left: 2px;
+}
+
+/* ── Toolbar ─────────────────────────────────────────────────── */
 .toolbar {
   display: flex;
   gap: 2px;
-  margin-bottom: 12px;
   align-items: stretch;
   flex-wrap: wrap;
-  justify-content: center;
-  background: #16162a;
-  border: 1px solid #2a2a4a;
-  border-radius: 4px;
-  padding: 4px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  padding: 3px;
 }
 
 .toolbar-group {
   display: flex;
-  gap: 4px;
+  gap: 3px;
   align-items: center;
   padding: 0 6px;
+  position: relative;
 }
 
 .toolbar-group + .toolbar-group {
-  border-left: 1px solid #2a2a4a;
+  border-left: 1px solid var(--border-subtle);
+}
+
+.toolbar-group::before {
+  content: attr(data-label);
+  position: absolute;
+  top: -9px;
+  left: 8px;
+  font-size: 0.5rem;
+  font-family: var(--font-display);
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  pointer-events: none;
 }
 
 .toolbar button,
 .toolbar .rom-label {
-  background: #2a2a4a;
-  color: #c0c0d0;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: var(--bg-raised);
+  color: var(--text-muted);
   border: 1px solid transparent;
   padding: 5px 10px;
   cursor: pointer;
-  font-family: inherit;
-  font-size: 0.75rem;
-  border-radius: 3px;
-  transition: background 0.1s, border-color 0.1s;
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  border-radius: 4px;
+  transition: all 0.15s ease;
   white-space: nowrap;
+  user-select: none;
 }
 
 .toolbar button:hover,
 .toolbar .rom-label:hover {
-  background: #3a3a5a;
-  border-color: #5a5a7a;
+  background: var(--bg-hover);
+  border-color: var(--border-mid);
+  color: var(--text-primary);
+}
+
+.toolbar button:active,
+.toolbar .rom-label:active {
+  transform: translateY(1px);
 }
 
 .toolbar button:disabled {
-  opacity: 0.35;
+  opacity: 0.3;
   cursor: not-allowed;
+  transform: none;
 }
 
 .toolbar button:disabled:hover {
-  background: #2a2a4a;
+  background: var(--bg-raised);
   border-color: transparent;
+  color: var(--text-muted);
 }
 
-.group-label {
-  font-size: 0.65rem;
-  color: #666;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  margin-right: 2px;
-  user-select: none;
+.rom-label {
+  cursor: pointer;
 }
 
-/* ── Shortcut strip ───────────────────────────────────────────── */
-
-.shortcut-strip {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: center;
-  gap: 6px;
-  margin-bottom: 10px;
-  padding: 6px 10px;
-  background: #111124;
-  border: 1px solid #262645;
-  border-radius: 4px;
-  max-width: 920px;
+.rom-label svg {
+  opacity: 0.7;
 }
 
-.shortcut-title {
-  font-size: 0.68rem;
-  color: #7fdbca;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  padding: 3px 6px;
-  margin-right: 2px;
-  align-self: center;
+.rom-label:hover svg {
+  opacity: 1;
 }
 
-.shortcut-item {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 0.7rem;
-  color: #c0c0d0;
-  background: #1d1d38;
-  border: 1px solid #2f2f56;
-  border-radius: 3px;
-  padding: 3px 6px;
-  white-space: nowrap;
-}
-
-kbd {
+/* ── Layer toggles ───────────────────────────────────────────── */
+.toggle-pip {
   display: inline-block;
-  min-width: 18px;
-  padding: 1px 4px;
-  border: 1px solid #6f6fa0;
-  border-bottom-width: 2px;
-  border-radius: 3px;
-  background: #2a2a4a;
-  color: #e6e6ff;
-  font-family: inherit;
-  font-size: 0.66rem;
-  line-height: 1.2;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--text-dim);
+  transition: all 0.2s ease;
+  flex-shrink: 0;
 }
 
-/* ── Layer + debug toggle states ──────────────────────────────── */
+.layer-toggle.active .toggle-pip {
+  background: var(--accent-green);
+  box-shadow: 0 0 6px var(--accent-green);
+}
 
 .layer-toggle.active {
-  background: #2a4a3a;
-  border-color: #4a8a5a;
-  color: #7fdbca;
+  color: var(--accent-cyan);
+  border-color: rgba(91,255,227,0.2);
+  background: rgba(91,255,227,0.06);
 }
 
 .layer-toggle:not(.active) {
-  color: #666;
-  text-decoration: line-through;
+  color: var(--text-dim);
 }
 
+.layer-toggle:not(.active) .toggle-pip {
+  background: var(--accent-red);
+  opacity: 0.5;
+  box-shadow: none;
+}
+
+/* ── Debug toggles ───────────────────────────────────────────── */
 .debug-toggle.active {
-  background: #3a3a5a;
-  border-color: #7a7aaa;
-  color: #bbaafe;
+  background: rgba(167,139,250,0.1);
+  border-color: rgba(167,139,250,0.3);
+  color: var(--accent-purple);
 }
 
-/* ── Render area ──────────────────────────────────────────────── */
-
+/* ── Main content ────────────────────────────────────────────── */
 .main-content {
   display: flex;
-  gap: 12px;
+  gap: 16px;
   align-items: flex-start;
 }
 
+/* ── CRT Frame ───────────────────────────────────────────────── */
 .render-area {
-  width: 768px;   /* 256 × 3 */
-  height: 672px;  /* 224 × 3 */
   position: relative;
 }
 
-/* Viewport wrapper applies 3× scale */
+.crt-frame {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.crt-bezel {
+  background: linear-gradient(165deg, #1e1e34 0%, #141425 50%, #0e0e1c 100%);
+  border: 1px solid var(--border-mid);
+  border-radius: 12px;
+  padding: var(--bezel-pad);
+  box-shadow:
+    0 0 0 1px rgba(0,0,0,0.5),
+    0 2px 20px rgba(0,0,0,0.6),
+    inset 0 1px 0 rgba(255,255,255,0.04);
+  position: relative;
+}
+
+.crt-bezel::before {
+  content: '';
+  position: absolute;
+  top: 6px;
+  right: 12px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent-green);
+  box-shadow: 0 0 6px var(--accent-green), 0 0 12px rgba(57,255,143,0.3);
+  animation: led-blink 4s ease-in-out infinite;
+}
+
+@keyframes led-blink {
+  0%, 90%, 100% { opacity: 1; }
+  95%           { opacity: 0.3; }
+}
+
+.crt-screen {
+  width: var(--scaled-w);
+  height: var(--scaled-h);
+  position: relative;
+  overflow: hidden;
+  border-radius: 4px;
+  background: #000;
+}
+
+/* CRT scanline overlay */
+.crt-scanlines {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 50;
+  background: repeating-linear-gradient(
+    to bottom,
+    transparent 0px,
+    transparent 2px,
+    rgba(0,0,0,0.12) 2px,
+    rgba(0,0,0,0.12) 3px
+  );
+  mix-blend-mode: multiply;
+}
+
+/* CRT inner glow / reflection */
+.crt-glow {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 51;
+  border-radius: 4px;
+  background:
+    radial-gradient(ellipse 120% 80% at 30% 20%, rgba(255,255,255,0.03) 0%, transparent 50%);
+  box-shadow:
+    inset 0 0 60px rgba(0,0,0,0.4),
+    inset 0 0 2px rgba(0,0,0,0.8);
+}
+
+/* CRT status label below screen */
+.crt-label {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 10px;
+  padding: 0 4px;
+  width: 100%;
+}
+
+.crt-model {
+  font-family: var(--font-display);
+  font-size: 0.55rem;
+  font-weight: 700;
+  color: var(--text-dim);
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+}
+
+.crt-dot {
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: var(--border-mid);
+}
+
+.crt-stat {
+  font-size: 0.68rem;
+  color: var(--text-muted);
+  letter-spacing: 0.04em;
+}
+
+.crt-stat-fps {
+  margin-left: auto;
+  color: var(--accent-green);
+  font-family: var(--font-display);
+  font-size: 0.6rem;
+  font-weight: 700;
+}
+
+/* ── Viewport (SNES 256×224 → 3× scale) ─────────────────────── */
 .viewport-wrapper {
   transform-origin: top left;
-  transform: scale(3);
+  transform: scale(var(--scale));
   position: absolute;
   top: 0;
   left: 0;
 }
 
-/* SNES viewport — 256×224 visible area */
 .snes-viewport {
-  width: 256px;
-  height: 224px;
+  width: var(--screen-w);
+  height: var(--screen-h);
   overflow: hidden;
   position: relative;
   background: #000;
   image-rendering: pixelated;
 }
 
-/* ── Canvas comparison mode ───────────────────────────────────── */
-
+/* ── Canvas comparison mode ──────────────────────────────────── */
 .canvas-mode {
   display: none;
   image-rendering: pixelated;
-  width: 256px;
-  height: 224px;
+  width: var(--screen-w);
+  height: var(--screen-h);
   transform-origin: top left;
-  transform: scale(3);
+  transform: scale(var(--scale));
   position: absolute;
   top: 0;
   left: 0;
@@ -208,12 +412,141 @@ kbd {
   display: block;
 }
 
-/* ── BG layers ────────────────────────────────────────────────── */
+/* ── Drop zone ───────────────────────────────────────────────── */
+.drop-zone {
+  margin-top: 20px;
+  width: 100%;
+  max-width: 320px;
+}
 
-/* Each bg-sublayer is a priority band (lo or hi) for one BG channel.
-   position:absolute + z-index creates a stacking context that competes
-   correctly in the viewport SC.  No transform — scroll is handled by
-   direct left/top positioning on each quadrant div. */
+.drop-zone-inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  padding: 28px 24px 22px;
+  border: 1.5px dashed var(--border-mid);
+  border-radius: 10px;
+  background: var(--bg-surface);
+  transition: all 0.25s ease;
+}
+
+body.dragover .drop-zone-inner {
+  border-color: var(--accent-purple);
+  background: rgba(167,139,250,0.05);
+  box-shadow: 0 0 30px rgba(167,139,250,0.08);
+}
+
+.cartridge-slot {
+  width: 80px;
+  height: 32px;
+  background: linear-gradient(180deg, var(--bg-raised) 0%, var(--bg-panel) 100%);
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border-mid);
+  position: relative;
+}
+
+.cartridge-slot-groove {
+  width: 56px;
+  height: 6px;
+  background: var(--bg-deep);
+  border-radius: 2px;
+  box-shadow: inset 0 1px 3px rgba(0,0,0,0.6);
+}
+
+.drop-text {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+.ext {
+  color: var(--accent-purple);
+  font-weight: bold;
+}
+
+body.rom-loaded .drop-zone { display: none; }
+
+/* ── Shortcut strip ──────────────────────────────────────────── */
+.shortcut-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin-top: 20px;
+  padding: 12px 18px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  max-width: 820px;
+  width: 100%;
+}
+
+.shortcut-group {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.shortcut-heading {
+  font-family: var(--font-display);
+  font-size: 0.52rem;
+  font-weight: 700;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  margin-right: 4px;
+}
+
+.shortcut-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.66rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+kbd {
+  display: inline-block;
+  min-width: 18px;
+  padding: 2px 5px;
+  border: 1px solid var(--border-mid);
+  border-bottom-width: 2px;
+  border-radius: 3px;
+  background: var(--bg-raised);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  line-height: 1.2;
+  text-align: center;
+}
+
+/* ── Status bar ──────────────────────────────────────────────── */
+.status-bar {
+  margin-top: 12px;
+  font-size: 0.68rem;
+  color: var(--text-dim);
+  text-align: center;
+  max-width: 820px;
+  width: 100%;
+}
+
+/* stat color classes (used by JS) */
+.stat-dim    { color: var(--text-muted); }
+.stat-green  { color: var(--accent-green); }
+.stat-yellow { color: var(--accent-amber); }
+.stat-red    { color: var(--accent-red); }
+
+/* ═══════════════════════════════════════════════════════════════
+   SNES Rendering Internals — BG / Sprite / Mode7
+   These must remain functionally identical
+   ═══════════════════════════════════════════════════════════════ */
+
+/* ── BG layers ───────────────────────────────────────────────── */
 .bg-sublayer {
   position: absolute;
   top: 0;
@@ -222,7 +555,6 @@ kbd {
   height: 224px;
 }
 
-/* Each quadrant: CSS Grid of 32 columns × auto rows, 8px each */
 .bg-quadrant {
   display: grid;
   grid-template-columns: repeat(32, 8px);
@@ -232,7 +564,6 @@ kbd {
   left: 0;
 }
 
-/* Individual BG tile */
 .bg-tile {
   width: 8px;
   height: 8px;
@@ -242,7 +573,7 @@ kbd {
   background-size: 128px 128px;
 }
 
-/* bigTiles (16×16): quadrant gets this class when layer.bigTiles=true */
+/* bigTiles (16×16) */
 .bg-quadrant.big-tiles {
   grid-template-columns: repeat(32, 16px);
   grid-auto-rows: 16px;
@@ -258,13 +589,12 @@ kbd {
 .bg-quadrant.big-tiles .flip-v  { transform-origin: 8px 8px; }
 .bg-quadrant.big-tiles .flip-hv { transform-origin: 8px 8px; }
 
-/* Tile flip via transform (applied as CSS class by bg-layer.js) */
+/* Tile flip */
 .flip-h  { transform: scale(-1,  1); transform-origin: 4px 4px; }
 .flip-v  { transform: scale( 1, -1); transform-origin: 4px 4px; }
 .flip-hv { transform: scale(-1, -1); transform-origin: 4px 4px; }
 
-/* ── Sprite layer ─────────────────────────────────────────────── */
-
+/* ── Sprite layer ────────────────────────────────────────────── */
 .sprite-layer {
   position: absolute;
   top: 0;
@@ -274,7 +604,6 @@ kbd {
   pointer-events: none;
 }
 
-/* Sprite root div — sized and positioned by sprite-layer.js */
 .sprite {
   position: absolute;
   contain: layout style;
@@ -283,7 +612,6 @@ kbd {
   background-size: 128px 128px;
 }
 
-/* Sub-tile div for multi-tile (>8×8) sprites */
 .sprite-tile {
   position: absolute;
   width: 8px;
@@ -293,8 +621,7 @@ kbd {
   background-size: 128px 128px;
 }
 
-/* ── Mode 7 layer ─────────────────────────────────────────────── */
-
+/* ── Mode 7 layer ────────────────────────────────────────────── */
 .mode7-perspective {
   position: absolute;
   top: 0;
@@ -315,16 +642,16 @@ kbd {
   transform-origin: 0 0;
 }
 
-/* ── Debug overlays ───────────────────────────────────────────── */
+/* ═══════════════════════════════════════════════════════════════
+   Debug Overlays
+   ═══════════════════════════════════════════════════════════════ */
 
-/* Tile grid: red outlines on every bg-tile */
 .debug-tile-grid .bg-tile {
   outline: 1px solid rgba(255, 0, 0, 0.35);
 }
 
-/* Sprite bounding boxes */
 .debug-sprite-boxes .sprite {
-  outline: 1px solid rgba(0, 255, 0, 0.6);
+  outline: 1px solid rgba(57, 255, 143, 0.6);
 }
 
 .debug-sprite-boxes .sprite::after {
@@ -335,19 +662,17 @@ kbd {
   font-size: 4px;
   line-height: 6px;
   padding: 0 1px;
-  background: rgba(0, 180, 0, 0.85);
-  color: #fff;
+  background: rgba(57, 255, 143, 0.85);
+  color: #000;
   font-family: monospace;
   pointer-events: none;
   white-space: nowrap;
 }
 
-/* Mode 7 wireframe: cyan outline on the plane canvas */
 .debug-mode7 .mode7-plane {
-  outline: 2px dashed rgba(0, 255, 255, 0.55);
+  outline: 2px dashed rgba(91, 255, 227, 0.55);
 }
 
-/* Tile grid overlay using CSS repeating gradient (z-index 100) */
 .debug-tile-grid .snes-viewport::after {
   content: '';
   position: absolute;
@@ -359,38 +684,76 @@ kbd {
     repeating-linear-gradient(to bottom, rgba(255, 0, 0, 0.25) 0 1px, transparent 1px 8px);
 }
 
-/* ── Status bar ───────────────────────────────────────────────── */
-
-.status-bar {
-  margin-top: 10px;
-  font-size: 0.75rem;
-  color: #888;
+/* ── Debug inspector sidebar ─────────────────────────────────── */
+#debug-sidebar {
   display: flex;
-  justify-content: center;
-  gap: 12px;
-  width: 100%;
-  max-width: 920px;
+  flex-direction: row;
+  align-items: flex-start;
+  gap: 4px;
 }
 
-.status-counters {
-  display: flex;
-  gap: 0;
-  margin-left: auto;
-  white-space: nowrap;
+#ruler-canvas {
+  width: 24px;
+  height: 672px;
+  image-rendering: pixelated;
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
 }
 
-.status-counters > span {
-  padding: 0 8px;
-  border-left: 1px solid #2a2a4a;
+#graph-canvas {
+  width: 96px;
+  height: 672px;
+  image-rendering: pixelated;
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
 }
 
-.status-counters > span:first-child {
-  border-left: none;
+/* Hover overlay */
+#hover-band {
+  position: absolute;
+  height: 3px;
+  width: 768px;
+  background: rgba(251, 191, 36, 0.35);
+  pointer-events: none;
+  display: none;
 }
 
-#fps-counter { color: #7fdbca; }
+#hover-tooltip {
+  position: absolute;
+  background: rgba(11, 11, 20, 0.92);
+  color: var(--text-primary);
+  font: 11px/1.5 var(--font-mono);
+  padding: 6px 10px;
+  border: 1px solid var(--border-mid);
+  border-radius: 6px;
+  pointer-events: none;
+  white-space: pre;
+  display: none;
+  z-index: 101;
+  backdrop-filter: blur(8px);
+}
 
-.stat-dim  { color: #888; }
-.stat-green { color: #7fdbca; }
-.stat-yellow { color: #dbc67f; }
-.stat-red  { color: #db7f7f; }
+/* ═══════════════════════════════════════════════════════════════
+   Animations & Micro-interactions
+   ═══════════════════════════════════════════════════════════════ */
+
+/* Drag-over body state */
+body.dragover .crt-bezel {
+  border-color: var(--accent-purple);
+  box-shadow:
+    0 0 0 1px rgba(0,0,0,0.5),
+    0 2px 20px rgba(0,0,0,0.6),
+    0 0 40px rgba(167,139,250,0.1),
+    inset 0 1px 0 rgba(255,255,255,0.04);
+}
+
+/* Page load stagger */
+.top-bar     { animation: fade-up 0.5s ease both; }
+.main-content { animation: fade-up 0.5s ease 0.08s both; }
+.drop-zone    { animation: fade-up 0.5s ease 0.16s both; }
+.shortcut-strip { animation: fade-up 0.5s ease 0.22s both; }
+
+@keyframes fade-up {
+  from { opacity: 0; transform: translateY(12px); }
+  to   { opacity: 1; transform: translateY(0); }
+}

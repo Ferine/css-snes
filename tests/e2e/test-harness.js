@@ -3,7 +3,7 @@
  * Loads a ROM, steps frames, renders CSS + canvas reference.
  * Exposes window.testHarness for Playwright to drive.
  */
-import { Snes } from 'snesjs';
+import { Snes, instrumentSnes } from 'snesjs';
 import { PPUStateExtractor } from '../../src/ppu-state-extractor.js';
 import { CSSRenderer } from '../../src/css-renderer.js';
 
@@ -61,6 +61,7 @@ window.testHarness = {
       return false;
     }
     snes.reset(true);
+    instrumentSnes(snes);
 
     extractor = new PPUStateExtractor(snes);
     renderer  = new CSSRenderer(wrapperEl);
@@ -77,6 +78,7 @@ window.testHarness = {
     while (remaining > 0) {
       const batch = Math.min(remaining, CHUNK);
       for (let i = 0; i < batch; i++) {
+        snes._scanlineData = new Array(224);
         snes.runFrame();
         latestState = extractor.extract();
         renderer.renderFrame(latestState);
@@ -120,6 +122,8 @@ window.testHarness = {
         sp.x < 256 && sp.x + sp.sizePx > 0 && sp.y < 224 && sp.y + sp.sizePx > 0
       ).length,
       cgRgb0: s.cgRgb[0],
+      // True if any visible scanline was rendered in mode 7 (mid-frame mode switch support)
+      hasMode7Scanlines: !!s.scanlineData?.some((sd) => sd?.mode === 7),
     };
   },
 

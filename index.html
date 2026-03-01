@@ -4,71 +4,126 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>CSS-SNES</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Orbitron:wght@400;700;900&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="./styles/snes-layers.css">
 </head>
 <body>
-  <h1>CSS-SNES — CSS Layer Renderer</h1>
-
-  <div class="toolbar">
-    <div class="toolbar-group">
-      <label class="rom-label">
-        Load ROM
-        <input type="file" id="rom-input" accept=".sfc,.smc" hidden>
-      </label>
-      <button id="btn-hirom" title="Toggle HiROM addressing mode">LoROM</button>
-      <button id="btn-pause" disabled>Pause</button>
-      <button id="btn-step" disabled>Step</button>
-      <button id="btn-toggle-canvas" disabled>Canvas Mode</button>
+  <header class="top-bar">
+    <div class="logo">
+      <span class="logo-icon">&#9654;</span>
+      <h1>CSS<span class="logo-sep">/</span>SNES</h1>
+      <span class="logo-sub">DOM Renderer</span>
     </div>
 
-    <div class="toolbar-group">
-      <span class="group-label">Layers</span>
-      <button id="layer-bg0" class="layer-toggle active" title="Toggle BG1 [1]">BG1</button>
-      <button id="layer-bg1" class="layer-toggle active" title="Toggle BG2 [2]">BG2</button>
-      <button id="layer-bg2" class="layer-toggle active" title="Toggle BG3 [3]">BG3</button>
-      <button id="layer-bg3" class="layer-toggle active" title="Toggle BG4 [4]">BG4</button>
-      <button id="layer-sprites" class="layer-toggle active" title="Toggle sprites [S]">OBJ</button>
-    </div>
+    <nav class="toolbar" role="toolbar" aria-label="Emulator controls">
+      <div class="toolbar-group" data-label="ROM">
+        <label class="rom-label" tabindex="0">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+          Load ROM
+          <input type="file" id="rom-input" accept=".sfc,.smc" hidden>
+        </label>
+        <button id="btn-hirom" title="Toggle HiROM addressing mode">LoROM</button>
+      </div>
 
-    <div class="toolbar-group">
-      <span class="group-label">Debug</span>
-      <button id="dbg-tile-grid" class="debug-toggle" title="Tile grid overlay [G]">Grid</button>
-      <button id="dbg-sprite-boxes" class="debug-toggle" title="Sprite bounding boxes [B]">Boxes</button>
-      <button id="dbg-mode7" class="debug-toggle" title="Mode 7 wireframe [7]">M7</button>
-    </div>
-  </div>
+      <div class="toolbar-group" data-label="Play">
+        <button id="btn-pause" disabled>
+          <svg class="icon-pause" width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
+          <svg class="icon-play" width="12" height="12" viewBox="0 0 24 24" fill="currentColor" style="display:none"><polygon points="5,3 19,12 5,21"/></svg>
+          Pause
+        </button>
+        <button id="btn-step" disabled>
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><polygon points="4,3 15,12 4,21"/><rect x="16" y="3" width="4" height="18"/></svg>
+          Step
+        </button>
+        <button id="btn-toggle-canvas" disabled>Canvas</button>
+      </div>
 
-  <div class="shortcut-strip" aria-label="Keyboard shortcuts">
-    <span class="shortcut-title">Keyboard</span>
-    <span class="shortcut-item"><kbd>Arrows</kbd> D-pad</span>
-    <span class="shortcut-item"><kbd>Z</kbd> B</span>
-    <span class="shortcut-item"><kbd>X</kbd> A</span>
-    <span class="shortcut-item"><kbd>A</kbd> Y</span>
-    <span class="shortcut-item"><kbd>S</kbd> X</span>
-    <span class="shortcut-item"><kbd>Enter</kbd> Start</span>
-    <span class="shortcut-item"><kbd>RShift</kbd> Select</span>
-    <span class="shortcut-item"><kbd>D</kbd> L</span>
-    <span class="shortcut-item"><kbd>C</kbd> R</span>
-    <span class="shortcut-item"><kbd>1-4</kbd> BG layers</span>
-    <span class="shortcut-item"><kbd>S</kbd> Sprites</span>
-  </div>
+      <div class="toolbar-group" data-label="Layers">
+        <button id="layer-bg0" class="layer-toggle active" title="Toggle BG1 [1]"><span class="toggle-pip"></span>BG1</button>
+        <button id="layer-bg1" class="layer-toggle active" title="Toggle BG2 [2]"><span class="toggle-pip"></span>BG2</button>
+        <button id="layer-bg2" class="layer-toggle active" title="Toggle BG3 [3]"><span class="toggle-pip"></span>BG3</button>
+        <button id="layer-bg3" class="layer-toggle active" title="Toggle BG4 [4]"><span class="toggle-pip"></span>BG4</button>
+        <button id="layer-sprites" class="layer-toggle active" title="Toggle sprites [O]"><span class="toggle-pip"></span>OBJ</button>
+      </div>
+
+      <div class="toolbar-group" data-label="Debug">
+        <button id="dbg-tile-grid" class="debug-toggle" title="Tile grid overlay [G]">Grid</button>
+        <button id="dbg-sprite-boxes" class="debug-toggle" title="Sprite bounding boxes [B]">Boxes</button>
+        <button id="dbg-mode7" class="debug-toggle" title="Mode 7 wireframe [7]">M7</button>
+        <button id="toggle-inspector" class="debug-toggle" title="Scanline inspector">Inspect</button>
+      </div>
+    </nav>
+  </header>
 
   <div class="main-content">
     <div class="render-area">
-      <div class="viewport-wrapper" id="viewport-wrapper">
-        <!-- CSS renderer mounts here -->
+      <div class="crt-frame">
+        <div class="crt-bezel">
+          <div class="crt-screen">
+            <div class="viewport-wrapper" id="viewport-wrapper">
+              <!-- CSS renderer mounts here -->
+            </div>
+            <canvas id="compare-canvas" class="canvas-mode" width="512" height="480"></canvas>
+            <div class="crt-scanlines"></div>
+            <div class="crt-glow"></div>
+          </div>
+        </div>
+        <div class="crt-label">
+          <span class="crt-model">PPU-2C77</span>
+          <span class="crt-dot"></span>
+          <span id="mode-counter" class="crt-stat">--</span>
+          <span class="crt-dot"></span>
+          <span id="spr-counter" class="crt-stat">-- obj</span>
+          <span class="crt-dot"></span>
+          <span id="fps-counter" class="crt-stat crt-stat-fps">-- fps</span>
+        </div>
       </div>
-      <canvas id="compare-canvas" class="canvas-mode" width="512" height="480"></canvas>
+      <div id="hover-overlay" style="display:none; position:absolute; top:0; left:0; width:768px; height:672px; pointer-events:none; z-index:100;">
+        <div id="hover-band"></div>
+        <div id="hover-tooltip"></div>
+      </div>
+    </div>
+    <div id="debug-sidebar" style="display:none">
+      <canvas id="ruler-canvas" width="8" height="224"></canvas>
+      <canvas id="graph-canvas" width="32" height="224"></canvas>
     </div>
   </div>
 
+  <div class="drop-zone" id="drop-zone">
+    <div class="drop-zone-inner">
+      <div class="cartridge-slot">
+        <div class="cartridge-slot-groove"></div>
+      </div>
+      <p class="drop-text">Drop <span class="ext">.sfc</span> / <span class="ext">.smc</span> ROM</p>
+    </div>
+  </div>
+
+  <footer class="shortcut-strip" aria-label="Keyboard shortcuts">
+    <div class="shortcut-group">
+      <span class="shortcut-heading">Controls</span>
+      <span class="shortcut-item"><kbd>&#x2190;&#x2191;&#x2193;&#x2192;</kbd> D-pad</span>
+      <span class="shortcut-item"><kbd>Z</kbd> B</span>
+      <span class="shortcut-item"><kbd>X</kbd> A</span>
+      <span class="shortcut-item"><kbd>A</kbd> Y</span>
+      <span class="shortcut-item"><kbd>S</kbd> X</span>
+      <span class="shortcut-item"><kbd>Enter</kbd> Start</span>
+      <span class="shortcut-item"><kbd>RShift</kbd> Select</span>
+      <span class="shortcut-item"><kbd>D</kbd> L</span>
+      <span class="shortcut-item"><kbd>C</kbd> R</span>
+    </div>
+    <div class="shortcut-group">
+      <span class="shortcut-heading">Layers</span>
+      <span class="shortcut-item"><kbd>1</kbd>-<kbd>4</kbd> BG</span>
+      <span class="shortcut-item"><kbd>O</kbd> Sprites</span>
+      <span class="shortcut-item"><kbd>G</kbd> Grid</span>
+      <span class="shortcut-item"><kbd>B</kbd> Boxes</span>
+    </div>
+  </footer>
+
   <div class="status-bar">
     <span id="status-bar">Drop a .sfc/.smc ROM or click Load ROM</span>
-    <span class="status-counters">
-      <span id="fps-counter">-- fps</span>
-      <span id="mode-counter" class="stat-dim">-- mode</span>
-      <span id="spr-counter" class="stat-dim">-- obj</span>
-    </span>
   </div>
 
   <script type="module" src="./src/app.js"></script>

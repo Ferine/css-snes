@@ -1,9 +1,10 @@
 /**
  * Main app: SnesJs integration, game loop, input handling, ROM loading.
  */
-import { Snes } from 'snesjs';
+import { Snes, instrumentSnes } from 'snesjs';
 import { PPUStateExtractor } from './ppu-state-extractor.js';
 import { CSSRenderer } from './css-renderer.js';
+import { DebugPanels } from './debug-panels.js';
 
 // --- State ---
 let snes = null;
@@ -13,6 +14,13 @@ let latestPPUState = null;
 // --- Renderer Setup ---
 const wrapperEl = document.getElementById('viewport-wrapper');
 const renderer = new CSSRenderer(wrapperEl);
+
+// --- Debug Panels ---
+const debugPanels = new DebugPanels(
+  document.getElementById('ruler-canvas'),
+  document.getElementById('graph-canvas'),
+  document.querySelector('.render-area'),
+);
 
 // --- Canvas comparison mode ---
 const compareCanvas = document.getElementById('compare-canvas');
@@ -72,6 +80,7 @@ function gameLoop(timestamp) {
   lastFrameTime = timestamp;
 
   // Run one SNES frame (synchronous), then extract PPU state
+  snes._scanlineData = new Array(224);
   snes.runFrame();
   latestPPUState = extractor.extract();
 
@@ -80,6 +89,7 @@ function gameLoop(timestamp) {
   } else {
     renderer.renderFrame(latestPPUState);
   }
+  debugPanels.update(latestPPUState);
 
   // Update status counters
   modeEl.textContent = `M${latestPPUState.mode}`;
@@ -116,6 +126,7 @@ function loadROM(buffer) {
       return;
     }
     nextSnes.reset(true);
+    instrumentSnes(nextSnes);
   } catch (e) {
     statusEl.textContent = `Error: ${e.message}`;
     return;
@@ -128,6 +139,7 @@ function loadROM(buffer) {
   running = true;
   paused = false;
   renderer.viewport.classList.remove('paused');
+  document.body.classList.add('rom-loaded');
   updateButtonStates();
   statusEl.textContent = 'Running';
   lastFrameTime = performance.now();
@@ -145,13 +157,29 @@ document.getElementById('rom-input').addEventListener('change', (e) => {
   reader.readAsArrayBuffer(file);
 });
 
-// Drag and drop
+// Drag and drop with visual feedback
+let dragCounter = 0;
+document.body.addEventListener('dragenter', (e) => {
+  e.preventDefault();
+  dragCounter++;
+  document.body.classList.add('dragover');
+});
+document.body.addEventListener('dragleave', (e) => {
+  e.preventDefault();
+  dragCounter--;
+  if (dragCounter <= 0) {
+    dragCounter = 0;
+    document.body.classList.remove('dragover');
+  }
+});
 document.body.addEventListener('dragover', (e) => {
   e.preventDefault();
   e.dataTransfer.dropEffect = 'copy';
 });
 document.body.addEventListener('drop', (e) => {
   e.preventDefault();
+  dragCounter = 0;
+  document.body.classList.remove('dragover');
   const file = e.dataTransfer.files[0];
   if (!file) return;
   const reader = new FileReader();
@@ -169,8 +197,20 @@ function updateButtonStates() {
   btnPause.disabled        = !running;
   btnStep.disabled         = !running || !paused;
   btnToggleCanvas.disabled = !running;
-  btnPause.textContent        = paused ? 'Resume' : 'Pause';
-  btnToggleCanvas.textContent = canvasMode ? 'CSS Mode' : 'Canvas Mode';
+
+  // Swap pause/play icon + label
+  const iconPause = btnPause.querySelector('.icon-pause');
+  const iconPlay  = btnPause.querySelector('.icon-play');
+  const pauseLabel = btnPause.lastChild;
+  if (iconPause && iconPlay) {
+    iconPause.style.display = paused ? 'none' : '';
+    iconPlay.style.display  = paused ? '' : 'none';
+  }
+  if (pauseLabel && pauseLabel.nodeType === Node.TEXT_NODE) {
+    pauseLabel.textContent = paused ? 'Resume' : 'Pause';
+  }
+
+  btnToggleCanvas.textContent = canvasMode ? 'CSS' : 'Canvas';
   btnHiRom.textContent        = hiRom ? 'HiROM' : 'LoROM';
 }
 
@@ -196,6 +236,7 @@ btnPause.addEventListener('click', () => {
 
 btnStep.addEventListener('click', () => {
   if (!running || !paused) return;
+  snes._scanlineData = new Array(224);
   snes.runFrame();
   latestPPUState = extractor.extract();
   if (canvasMode) {
@@ -203,6 +244,7 @@ btnStep.addEventListener('click', () => {
   } else {
     renderer.renderFrame(latestPPUState);
   }
+  debugPanels.update(latestPPUState);
   statusEl.textContent = `Paused — Frame ${renderer.frameCount}`;
 });
 
@@ -241,6 +283,13 @@ function wireDebugBtn(btnId, cssClass) {
 wireDebugBtn('dbg-tile-grid',    'debug-tile-grid');
 wireDebugBtn('dbg-sprite-boxes', 'debug-sprite-boxes');
 wireDebugBtn('dbg-mode7',        'debug-mode7');
+
+document.getElementById('toggle-inspector').addEventListener('click', function() {
+  this.classList.toggle('active');
+  const on = this.classList.contains('active');
+  document.getElementById('debug-sidebar').style.display = on ? '' : 'none';
+  debugPanels.setVisible(on);
+});
 
 // --- SNES Keyboard Input ---
 // Button bit numbers for setPad1ButtonPressed/Released(num):

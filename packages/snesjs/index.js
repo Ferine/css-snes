@@ -5777,3 +5777,29 @@ function Snes() {
 }
 
 export { Snes };
+
+/**
+ * Monkey-patch ppu.renderLine to capture per-scanline PPU state.
+ * Call once after snes.reset(true). Before each runFrame(), set
+ * snes._scanlineData = new Array(224) to enable capture for that frame.
+ */
+export function instrumentSnes(snes) {
+  const ppu = snes.ppu;
+  snes._scanlineData = null;
+  const orig = ppu.renderLine.bind(ppu);
+  ppu.renderLine = function(line) {
+    // Visible lines are yPos 1–224; store at index [line-1] so scanlineData[y] == screen row y.
+    if (snes._scanlineData && line >= 1 && line <= 224) {
+      snes._scanlineData[line - 1] = {
+        mode: ppu.mode,
+        bgHoff: [ppu.bgHoff[0], ppu.bgHoff[1], ppu.bgHoff[2], ppu.bgHoff[3]],
+        bgVoff: [ppu.bgVoff[0], ppu.bgVoff[1], ppu.bgVoff[2], ppu.bgVoff[3]],
+        mode7A: ppu.mode7A, mode7B: ppu.mode7B,
+        mode7C: ppu.mode7C, mode7D: ppu.mode7D,
+        mode7X: ppu.mode7X, mode7Y: ppu.mode7Y,
+        mode7Hoff: ppu.mode7Hoff, mode7Voff: ppu.mode7Voff,
+      };
+    }
+    return orig(line);
+  };
+}

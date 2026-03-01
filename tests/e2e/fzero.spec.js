@@ -102,6 +102,18 @@ test('F-Zero boot + title diagnostics', async ({ page }) => {
   await page.evaluate(() => window.testHarness.stepFrames(300));
   checkpoints.push(await capture(page, 'settle-300'));
 
+  // Navigate through remaining menus to reach Mode 7 race track.
+  // Expected flow from here: YES/NO confirm → class select → track select → countdown → race
+  for (let i = 0; i < 5; i++) {
+    await page.evaluate(() => window.testHarness.buttonDown(3)); // Start
+    await page.evaluate(() => window.testHarness.stepFrames(3));
+    await page.evaluate(() => window.testHarness.buttonUp(3));
+    await page.evaluate(() => window.testHarness.stepFrames(120));
+  }
+  // Wait for race countdown + first seconds of racing
+  await page.evaluate(() => window.testHarness.stepFrames(360));
+  checkpoints.push(await capture(page, 'race-track'));
+
   // Write full report
   const report = {
     rom: path.basename(ROM_PATH),
@@ -147,4 +159,14 @@ test('F-Zero boot + title diagnostics', async ({ page }) => {
   // At least one checkpoint should have < 80% diff (something is rendering)
   const bestDiff = Math.min(...checkpoints.map((c) => c.diffPercent));
   expect(bestDiff, 'At least one checkpoint should have <80% diff vs reference').toBeLessThan(80);
+
+  // If we reached mode 7 (or a mixed-mode frame with mode 7 scanlines), check rendering quality
+  const raceCheckpoint = checkpoints.find((c) => c.label === 'race-track');
+  const hasM7 = raceCheckpoint?.ppu?.mode === 7 || raceCheckpoint?.ppu?.hasMode7Scanlines;
+  if (hasM7) {
+    console.log(`Mode 7 reached! race-track diff=${raceCheckpoint.diffPercent}%`);
+    expect(raceCheckpoint.diffPercent, 'Mode 7 race track should render within 30% of reference').toBeLessThan(30);
+  } else {
+    console.log(`race-track mode=${raceCheckpoint?.ppu?.mode} hasMode7Scanlines=${raceCheckpoint?.ppu?.hasMode7Scanlines} (did not reach mode 7)`);
+  }
 });

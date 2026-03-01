@@ -13,8 +13,11 @@
  */
 import { TileCache } from './tile-cache.js';
 import { BGLayer } from './bg-layer.js';
+import { BGCanvasRenderer } from './bg-canvas-renderer.js';
 import { Mode7Layer } from './mode7-layer.js';
 import { SpriteLayer } from './sprite-layer.js';
+import { hasHdmaScroll } from './ppu-state-extractor.js';
+import { ScanlineCompositor, hasMode7Scanlines } from './scanline-compositor.js';
 
 // Per-mode BG z-index tables: [bg0lo, bg0hi, bg1lo, bg1hi, bg2lo, bg2hi, bg3lo, bg3hi]
 // -1 means layer absent in this mode.
@@ -72,7 +75,14 @@ export class CSSRenderer {
       new BGLayer(this.viewport, 2),
       new BGLayer(this.viewport, 3),
     ];
+    this.bgCanvasLayers = [
+      new BGCanvasRenderer(this.viewport, 0),
+      new BGCanvasRenderer(this.viewport, 1),
+      new BGCanvasRenderer(this.viewport, 2),
+      new BGCanvasRenderer(this.viewport, 3),
+    ];
     this.mode7Layer  = new Mode7Layer(this.viewport);
+    this.compositor  = new ScanlineCompositor(this.viewport);
     this.spriteLayer = new SpriteLayer(this.viewport);
 
     // UI-level layer visibility overrides (independent of PPU enabled flags)
@@ -118,16 +128,31 @@ export class CSSRenderer {
     const sprZTable = SPR_Z_TABLE[modeKey] ?? SPR_Z_TABLE.default;
 
     // 4. Update layers based on PPU mode
-    if (ppuState.mode === 7) {
+    // Use scanline compositor for any frame with mid-frame mode switches (e.g. mode 1 HUD + mode 7 road)
+    // or pure mode 7 frames. It renders all BG layers per-scanline; CSS sprites overlay on top.
+    const useScanlineCompositor = hasMode7Scanlines(ppuState.scanlineData)
+      || ppuState.mode === 7;
+
+    if (useScanlineCompositor) {
       for (const bg of this.bgLayers) bg.hide();
-      this.mode7Layer.update(ppuState);
+      for (const bg of this.bgCanvasLayers) bg.hide();
+      this.mode7Layer.hide();
+      this.compositor.show();
+      this.compositor.update(ppuState);
     } else {
+      this.compositor.hide();
       this.mode7Layer.hide();
       for (let l = 0; l < 4; l++) {
         const layer = ppuState.bgLayers[l];
         if (!layer || !this.layerVisible[`bg${l}`]) {
           this.bgLayers[l].hide();
+          this.bgCanvasLayers[l].hide();
+        } else if (hasHdmaScroll(ppuState.scanlineData, l)) {
+          this.bgLayers[l].hide();
+          this.bgCanvasLayers[l].show();
+          this.bgCanvasLayers[l].update(layer, ppuState.vram, ppuState.cgRgb, ppuState.scanlineData);
         } else {
+          this.bgCanvasLayers[l].hide();
           this.bgLayers[l].update(layer, this.tileCache, ppuState.vram, ppuState);
         }
       }
@@ -138,6 +163,7 @@ export class CSSRenderer {
     for (let l = 0; l < 4; l++) {
       const { filter, opacity } = colorMathFilter(cm, l);
       this.bgLayers[l].setColorMath(filter, opacity);
+      this.bgCanvasLayers[l].setColorMath(filter, opacity);
     }
     const { filter: sf, opacity: so } = colorMathFilter(cm, 4);
     this.spriteLayer.setColorMath(sf, so);
@@ -164,8 +190,10 @@ export class CSSRenderer {
     for (let l = 0; l < 4; l++) {
       if (!this.layerVisible[`bg${l}`]) {
         this.bgLayers[l].hide();
+        this.bgCanvasLayers[l].hide();
       } else {
         this.bgLayers[l].show();
+        // Canvas layer show/hide is managed per-frame by renderFrame based on HDMA detection
       }
     }
     this.spriteLayer.spriteLayer.style.display = this.layerVisible.sprites ? '' : 'none';
@@ -176,7 +204,10 @@ export class CSSRenderer {
   _applyZTables(modeKey) {
     const bgZ = BG_Z_TABLE[modeKey] ?? BG_Z_TABLE.default;
     for (let l = 0; l < 4; l++) {
-      this.bgLayers[l].setZIndices(bgZ[l * 2], bgZ[l * 2 + 1]);
+      const loZ = bgZ[l * 2];
+      const hiZ = bgZ[l * 2 + 1];
+      this.bgLayers[l].setZIndices(loZ, hiZ);
+      this.bgCanvasLayers[l].setZIndices(loZ, hiZ);
     }
   }
 }

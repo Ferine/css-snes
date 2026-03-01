@@ -92,6 +92,9 @@ export class PPUStateExtractor {
 
       // SnesJs rendered frame (RGB triplets, 512×240 layout, 3 Uint16 per pixel)
       pixelOutput: ppu.pixelOutput,
+
+      // Per-scanline PPU state (captured by instrumentSnes); null if not instrumented.
+      scanlineData: this.snes._scanlineData ?? null,
     };
   }
 
@@ -196,6 +199,23 @@ export class PPUStateExtractor {
     }
     return sprites;
   }
+}
+
+/**
+ * Returns true if any scanline in scanlineData has a different BG scroll value
+ * for the given layer compared to scanline 0, indicating HDMA scroll is active.
+ * @param {Array|null} scanlineData
+ * @param {number} layerIdx  0-3
+ */
+export function hasHdmaScroll(scanlineData, layerIdx) {
+  if (!scanlineData?.[0]) return false;
+  const h0 = scanlineData[0].bgHoff[layerIdx];
+  const v0 = scanlineData[0].bgVoff[layerIdx];
+  for (let y = 1; y < 224; y++) {
+    const s = scanlineData[y];
+    if (s && (s.bgHoff[layerIdx] !== h0 || s.bgVoff[layerIdx] !== v0)) return true;
+  }
+  return false;
 }
 
 /**
