@@ -93,6 +93,20 @@ window.testHarness = {
   /** Button press (SNES bit numbers: 0=B 1=Y 2=Sel 3=Start 4=Up 5=Down 6=Left 7=Right 8=A 9=X 10=L 11=R) */
   buttonDown(btn) { if (snes) snes.setPad1ButtonPressed(btn); },
   buttonUp(btn)   { if (snes) snes.setPad1ButtonReleased(btn); },
+  setMode7CssOnly(on) { if (renderer) renderer.setMode7CssOnly(!!on); },
+  setLayerVisibility(vis) {
+    if (!renderer) return;
+    for (const k of ['bg0', 'bg1', 'bg2', 'bg3', 'sprites']) {
+      if (Object.prototype.hasOwnProperty.call(vis, k)) {
+        renderer.layerVisible[k] = !!vis[k];
+      }
+    }
+    if (latestState) {
+      renderer.renderFrame(latestState);
+    } else {
+      renderer.applyLayerVisibility();
+    }
+  },
 
   isReady() { return ready; },
   getFrameCount() { return frameCount; },

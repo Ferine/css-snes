@@ -638,6 +638,36 @@ kbd {
   left: 0;
   width: 1024px;
   height: 1024px;
+  background-image: var(--m7-map-url);
+  background-repeat: repeat;
+  background-size: 1024px 1024px;
+  image-rendering: pixelated;
+  transform-origin: 0 0;
+}
+
+.mode7-rows {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+}
+
+.mode7-row {
+  position: absolute;
+  left: 0;
+  width: 256px;
+  height: 1px;
+  overflow: hidden;
+}
+
+.mode7-row-plane {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 1024px;
+  height: 1024px;
+  background-image: var(--m7-map-url);
+  background-repeat: repeat;
+  background-size: 1024px 1024px;
   image-rendering: pixelated;
   transform-origin: 0 0;
 }

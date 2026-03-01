@@ -26,6 +26,8 @@ const debugPanels = new DebugPanels(
 const compareCanvas = document.getElementById('compare-canvas');
 const compareCtx = compareCanvas.getContext('2d');
 let canvasMode = false;
+let mode7CssOnly = false;
+renderer.setMode7CssOnly(mode7CssOnly);
 
 function renderCanvasFrame(ppuState) {
   // pixelOutput: Uint16Array(512×3×240). Each pixel at (x, y) → index (y*512+x)*3 = R,G,B.
@@ -191,12 +193,14 @@ document.body.addEventListener('drop', (e) => {
 const btnPause        = document.getElementById('btn-pause');
 const btnStep         = document.getElementById('btn-step');
 const btnToggleCanvas = document.getElementById('btn-toggle-canvas');
+const btnMode7Css     = document.getElementById('btn-mode7-css');
 const btnHiRom        = document.getElementById('btn-hirom');
 
 function updateButtonStates() {
   btnPause.disabled        = !running;
   btnStep.disabled         = !running || !paused;
   btnToggleCanvas.disabled = !running;
+  btnMode7Css.disabled     = !running;
 
   // Swap pause/play icon + label
   const iconPause = btnPause.querySelector('.icon-pause');
@@ -211,6 +215,7 @@ function updateButtonStates() {
   }
 
   btnToggleCanvas.textContent = canvasMode ? 'CSS' : 'Canvas';
+  btnMode7Css.classList.toggle('active', mode7CssOnly);
   btnHiRom.textContent        = hiRom ? 'HiROM' : 'LoROM';
 }
 
@@ -253,6 +258,17 @@ btnToggleCanvas.addEventListener('click', () => {
   wrapperEl.style.display      = canvasMode ? 'none' : '';
   compareCanvas.classList.toggle('active', canvasMode);
   updateButtonStates();
+});
+
+btnMode7Css.addEventListener('click', () => {
+  mode7CssOnly = !mode7CssOnly;
+  renderer.setMode7CssOnly(mode7CssOnly);
+  updateButtonStates();
+  if (!paused && running) {
+    statusEl.textContent = mode7CssOnly ? 'Running — Mode7 CSS approx ON' : 'Running';
+  } else if (paused && running) {
+    statusEl.textContent = mode7CssOnly ? 'Paused — Mode7 CSS approx ON' : 'Paused';
+  }
 });
 
 // --- Layer Toggle Buttons ---
@@ -336,6 +352,7 @@ document.addEventListener('keydown', (e) => {
     case 'g': case 'G': document.getElementById('dbg-tile-grid')?.click(); break;
     case 'b': case 'B': document.getElementById('dbg-sprite-boxes')?.click(); break;
     case '7': document.getElementById('dbg-mode7')?.click(); break;
+    case 'm': case 'M': document.getElementById('btn-mode7-css')?.click(); break;
   }
 });
 

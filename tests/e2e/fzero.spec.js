@@ -66,6 +66,9 @@ test('F-Zero boot + title diagnostics', async ({ page }) => {
   // Load ROM
   const loaded = await page.evaluate((bytes) => window.testHarness.loadROM(bytes), romBytes);
   expect(loaded, 'ROM failed to load').toBe(true);
+  if (process.env.M7_CSS_ONLY === '1') {
+    await page.evaluate(() => window.testHarness.setMode7CssOnly(true));
+  }
 
   const checkpoints = [];
 
@@ -113,6 +116,30 @@ test('F-Zero boot + title diagnostics', async ({ page }) => {
   // Wait for race countdown + first seconds of racing
   await page.evaluate(() => window.testHarness.stepFrames(360));
   checkpoints.push(await capture(page, 'race-track'));
+
+  if (process.env.LAYER_SWEEP === '1') {
+    const keys = ['bg0', 'bg1', 'bg2', 'bg3', 'sprites'];
+    const sweep = [];
+    for (let mask = 0; mask < (1 << keys.length); mask++) {
+      const visible = {};
+      for (let i = 0; i < keys.length; i++) {
+        visible[keys[i]] = (mask & (1 << i)) !== 0;
+      }
+      await page.evaluate((vis) => window.testHarness.setLayerVisibility(vis), visible);
+      const cssBuf = await page.locator('.snes-viewport').screenshot();
+      const refBuf = await page.locator('#ref-canvas').screenshot();
+      const { diffPercent } = diffImages(cssBuf, refBuf);
+      sweep.push({ visible, diffPercent: +diffPercent.toFixed(2) });
+    }
+    sweep.sort((a, b) => a.diffPercent - b.diffPercent);
+    fs.writeFileSync(path.join(RESULTS_DIR, 'layer-sweep.json'), JSON.stringify(sweep, null, 2));
+    console.log('LAYER SWEEP TOP 8:', JSON.stringify(sweep.slice(0, 8), null, 2));
+    await page.evaluate((vis) => window.testHarness.setLayerVisibility(vis), sweep[0].visible);
+    checkpoints.push(await capture(page, 'race-track-layer-sweep-best'));
+    await page.evaluate(() => window.testHarness.setLayerVisibility({
+      bg0: true, bg1: true, bg2: true, bg3: true, sprites: true,
+    }));
+  }
 
   // Write full report
   const report = {

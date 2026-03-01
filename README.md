@@ -103,6 +103,7 @@ Open the page, drop a `.sfc` / `.smc` ROM onto the cartridge slot (or click **Lo
 
 **Layer toggles:** `1`–`4` for BG1–BG4, `O` for sprites.
 **Debug overlays:** `G` tile grid, `B` sprite bounding boxes, `7` Mode 7 wireframe.
+**Mode 7 CSS approximation:** `M` toggles the `M7 CSS` button (forces the CSS approximation path for Mode 7 instead of the scanline compositor).
 
 ### Canvas comparison mode
 
@@ -134,7 +135,7 @@ Requires the ROM at `roms/F-ZERO (E).smc` (not included — bring your own legal
 
 This is a CSS renderer for a 1990 game console. Expectations should be calibrated accordingly.
 
-- **Mode 7 is not pure CSS.** The affine-transformed background plane is software-rasterized onto a canvas. We tried pure CSS `matrix3d()` and it was... not great. The canvas is composited into the DOM layout alongside the CSS sprite/BG layers, so it's *mostly* CSS. We sleep okay at night. Mostly.
+- **Mode 7 accuracy vs. CSS tradeoff.** Default Mode 7 rendering is software-rasterized (scanline-accurate). The `M7 CSS` toggle forces a CSS approximation path (affine transform + scanline clip), which is less accurate but useful for experimenting with CSS-only composition.
 
 - **No sub-screen color math.** The SNES has a main screen and a sub-screen that can be blended together for transparency, color addition/subtraction, and other effects. We only do main-screen window clipping. Color math is approximated with CSS `brightness()` and `opacity`, which is like approximating a symphony with a kazoo.
 

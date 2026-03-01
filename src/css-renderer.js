@@ -87,6 +87,7 @@ export class CSSRenderer {
 
     // UI-level layer visibility overrides (independent of PPU enabled flags)
     this.layerVisible = { bg0: true, bg1: true, bg2: true, bg3: true, sprites: true };
+    this.mode7CssOnly = false;
 
     this.frameCount  = 0;
     this._prevModeKey = null;
@@ -128,10 +129,13 @@ export class CSSRenderer {
     const sprZTable = SPR_Z_TABLE[modeKey] ?? SPR_Z_TABLE.default;
 
     // 4. Update layers based on PPU mode
-    // Use scanline compositor for any frame with mid-frame mode switches (e.g. mode 1 HUD + mode 7 road)
-    // or pure mode 7 frames. It renders all BG layers per-scanline; CSS sprites overlay on top.
-    const useScanlineCompositor = hasMode7Scanlines(ppuState.scanlineData)
-      || ppuState.mode === 7;
+    // Default path: compositor for any frame touching mode 7 (accurate scanline routing).
+    // Optional path: CSS-only mode 7 approximation (no compositor) for pure mode 7 only.
+    // Mixed mode-1/mode-7 scanline frames remain compositor-driven to avoid cross-mode garbling.
+    const hasMode7Rows = hasMode7Scanlines(ppuState.scanlineData);
+    const mixedMode7Frame = hasMode7Rows && ppuState.mode !== 7;
+    const useScanlineCompositor = mixedMode7Frame
+      || (!this.mode7CssOnly && (hasMode7Rows || ppuState.mode === 7));
 
     if (useScanlineCompositor) {
       for (const bg of this.bgLayers) bg.hide();
@@ -141,19 +145,47 @@ export class CSSRenderer {
       this.compositor.update(ppuState);
     } else {
       this.compositor.hide();
-      this.mode7Layer.hide();
-      for (let l = 0; l < 4; l++) {
-        const layer = ppuState.bgLayers[l];
-        if (!layer || !this.layerVisible[`bg${l}`]) {
-          this.bgLayers[l].hide();
-          this.bgCanvasLayers[l].hide();
-        } else if (hasHdmaScroll(ppuState.scanlineData, l)) {
-          this.bgLayers[l].hide();
-          this.bgCanvasLayers[l].show();
-          this.bgCanvasLayers[l].update(layer, ppuState.vram, ppuState.cgRgb, ppuState.scanlineData);
+      const useMode7Layer = ppuState.mode === 7 || hasMode7Rows;
+
+      if (useMode7Layer) {
+        // Pure mode 7 frame: hide normal BG layers (mode 7 plane replaces them).
+        if (ppuState.mode === 7) {
+          for (const bg of this.bgLayers) bg.hide();
+          for (const bg of this.bgCanvasLayers) bg.hide();
         } else {
-          this.bgCanvasLayers[l].hide();
-          this.bgLayers[l].update(layer, this.tileCache, ppuState.vram, ppuState);
+          // Mixed frame: render normal BG layers as usual, then overlay CSS mode 7
+          // clipped to mode-7 scanlines.
+          for (let l = 0; l < 4; l++) {
+            const layer = ppuState.bgLayers[l];
+            if (!layer || !this.layerVisible[`bg${l}`]) {
+              this.bgLayers[l].hide();
+              this.bgCanvasLayers[l].hide();
+            } else if (hasHdmaScroll(ppuState.scanlineData, l)) {
+              this.bgLayers[l].hide();
+              this.bgCanvasLayers[l].show();
+              this.bgCanvasLayers[l].update(layer, ppuState.vram, ppuState.cgRgb, ppuState.scanlineData);
+            } else {
+              this.bgCanvasLayers[l].hide();
+              this.bgLayers[l].update(layer, this.tileCache, ppuState.vram, ppuState);
+            }
+          }
+        }
+        this.mode7Layer.update(ppuState, { forceCss: this.mode7CssOnly });
+      } else {
+        this.mode7Layer.hide();
+        for (let l = 0; l < 4; l++) {
+          const layer = ppuState.bgLayers[l];
+          if (!layer || !this.layerVisible[`bg${l}`]) {
+            this.bgLayers[l].hide();
+            this.bgCanvasLayers[l].hide();
+          } else if (hasHdmaScroll(ppuState.scanlineData, l)) {
+            this.bgLayers[l].hide();
+            this.bgCanvasLayers[l].show();
+            this.bgCanvasLayers[l].update(layer, ppuState.vram, ppuState.cgRgb, ppuState.scanlineData);
+          } else {
+            this.bgCanvasLayers[l].hide();
+            this.bgLayers[l].update(layer, this.tileCache, ppuState.vram, ppuState);
+          }
         }
       }
     }
@@ -181,6 +213,11 @@ export class CSSRenderer {
     this.viewport.dataset.mode  = ppuState.mode;
 
     this.frameCount++;
+  }
+
+  setMode7CssOnly(enabled) {
+    this.mode7CssOnly = !!enabled;
+    this.viewport.dataset.mode7CssOnly = this.mode7CssOnly ? '1' : '0';
   }
 
   /**
