@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>CSS-SNES E2E Test Harness</title>
+  <link rel="stylesheet" href="/styles/snes-layers.css">
+  <style>
+    /* Disable 3× scale so screenshots are exactly 256×224 */
+    .viewport-wrapper { transform: none !important; }
+    body { margin: 0; background: #000; }
+    #test-container { display: flex; gap: 16px; padding: 8px; }
+    #ref-canvas { image-rendering: pixelated; }
+  </style>
+</head>
+<body>
+  <div id="test-container">
+    <div class="viewport-wrapper" id="viewport-wrapper">
+      <!-- CSS renderer mounts here -->
+    </div>
+    <canvas id="ref-canvas" width="256" height="224"></canvas>
+  </div>
+  <script type="module" src="/tests/e2e/test-harness.js"></script>
+</body>
+</html>

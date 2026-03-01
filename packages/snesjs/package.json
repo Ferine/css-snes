@@ -1,0 +1,8 @@
+{
+  "name": "snesjs",
+  "version": "1.0.0",
+  "description": "SnesJs vendored as an ES module (source: github.com/angelo-wf/SnesJs)",
+  "type": "module",
+  "main": "index.js",
+  "license": "MIT"
+}

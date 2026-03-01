@@ -1,0 +1,6 @@
+node_modules/
+dist/
+.DS_Store
+roms/
+tests/e2e/test-results/
+playwright-report/
