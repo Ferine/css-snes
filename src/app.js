@@ -95,9 +95,11 @@ function gameLoop(timestamp) {
 
   // Update status counters
   modeEl.textContent = `M${latestPPUState.mode}`;
-  const visSprites = latestPPUState.sprites.filter(s =>
-    s.x < 256 && s.x + s.sizePx > 0 && s.y < 224 && s.y + s.sizePx > 0
-  ).length;
+  let visSprites = 0;
+  for (let i = 0; i < 128; i++) {
+    const s = latestPPUState.sprites[i];
+    if (s.x < 256 && s.x + s.sizePx > 0 && s.y < 224 && s.y + s.sizePx > 0) visSprites++;
+  }
   sprEl.textContent = `${visSprites} obj`;
 
   // FPS counter

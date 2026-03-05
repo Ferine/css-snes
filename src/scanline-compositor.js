@@ -6,7 +6,7 @@
  * Renders all BG layers to a single 256×224 canvas; CSS sprites overlay on top.
  *
  * BG rendering (non-mode-7 scanlines):
- *   Layers rendered back-to-front (higher layer index = further back).
+ *   Pixels are resolved by per-tile priority bit13 against mode z tables.
  *   Each layer uses per-scanline bgHoff/bgVoff from scanlineData.
  *   Tile decoding mirrors tile-cache.js / pipu.js bitplane format.
  *
@@ -27,6 +27,14 @@ const BIT_PER_MODE = [
   8, 5, 5, 5,   // mode 7
 ];
 
+// Per-mode BG z-index tables: [bg0lo, bg0hi, bg1lo, bg1hi, bg2lo, bg2hi, bg3lo, bg3hi]
+const BG_Z_TABLE = {
+  0:       [8, 11,  7, 10,  2,  5,  1,  4],
+  1:       [6,  9,  5,  8,  1,  3, -1, -1],
+  '1l3p':  [5,  8,  4,  7,  2, 10, -1, -1],
+  default: [6,  9,  5,  8,  1,  3, -1, -1],
+};
+
 export class ScanlineCompositor {
   constructor(container) {
     this._canvas = document.createElement('canvas');
@@ -36,51 +44,51 @@ export class ScanlineCompositor {
       'position:absolute;top:0;left:0;image-rendering:pixelated;z-index:1;display:none;';
     container.appendChild(this._canvas);
     this._ctx = this._canvas.getContext('2d');
+    this._imgData = this._ctx.createImageData(256, 224);
+    this._prevClip = '';
   }
 
   hide() { this._canvas.style.display = 'none'; }
   show() { this._canvas.style.display = ''; }
+  setClipPath(clip) {
+    const next = clip || '';
+    if (next === this._prevClip) return;
+    this._canvas.style.clipPath = next;
+    this._prevClip = next;
+  }
 
   /**
    * Render all scanlines to the compositor canvas.
    * @param {object} ppuState - full PPU state with scanlineData
    */
-  update(ppuState) {
-    const { vram, cgRgb, bgLayers, mode7, scanlineData, forcedBlank } = ppuState;
+  update(ppuState, options = {}) {
+    const { vram, bgLayers, mode7, scanlineData, palR, palG, palB } = ppuState;
+    const layerVisible = options.layerVisible ?? null;
+    const layer3Prio = !!ppuState.layer3Prio;
 
-    // Pre-decode all 256 CGRAM entries once
-    const palR = new Uint8Array(256);
-    const palG = new Uint8Array(256);
-    const palB = new Uint8Array(256);
-    for (let i = 0; i < 256; i++) {
-      const c = cgRgb[i];
-      palR[i] = parseInt(c.slice(1, 3), 16);
-      palG[i] = parseInt(c.slice(3, 5), 16);
-      palB[i] = parseInt(c.slice(5, 7), 16);
-    }
-
-    const imgData = this._ctx.createImageData(256, 224);
+    const imgData = this._imgData;
     const data    = imgData.data;
 
-    // Fill with backdrop colour (CGRAM[0])
-    const bdR = palR[0], bdG = palG[0], bdB = palB[0];
-    for (let i = 0; i < 256 * 224; i++) {
-      data[i * 4]     = bdR;
-      data[i * 4 + 1] = bdG;
-      data[i * 4 + 2] = bdB;
-      data[i * 4 + 3] = 255;
-    }
+    // Fill backdrop using Uint32Array (4× fewer writes)
+    const u32 = new Uint32Array(data.buffer);
+    const bdPixel = (255 << 24) | (palB[0] << 16) | (palG[0] << 8) | palR[0];
+    u32.fill(bdPixel);
 
     const m7 = mode7; // frame-end mode7 (fallback when no per-scanline data)
+    const zBuf = new Int16Array(256);
 
     for (let y = 0; y < 224; y++) {
       const sd        = scanlineData?.[y];
       const lineMode  = sd?.mode ?? ppuState.mode;
 
       if (lineMode === 7) {
-        _renderMode7Row(y, sd, m7, vram, palR, palG, palB, data);
+        if (!layerVisible || layerVisible.bg0 !== false) {
+          _renderMode7Row(y, sd, m7, vram, palR, palG, palB, data);
+        }
       } else {
-        _renderBGRow(y, lineMode, sd, bgLayers, vram, palR, palG, palB, data);
+        zBuf.fill(0);
+        const bgZ = _bgZTableForMode(lineMode, layer3Prio);
+        _renderBGRow(y, lineMode, sd, bgLayers, vram, palR, palG, palB, data, layerVisible, bgZ, zBuf);
       }
     }
 
@@ -178,12 +186,11 @@ function _renderMode7Row(y, sd, frameM7, vram, palR, palG, palB, data) {
 // BG per-scanline rendering
 // ---------------------------------------------------------------------------
 
-function _renderBGRow(y, mode, sd, bgLayers, vram, palR, palG, palB, data) {
+function _renderBGRow(y, mode, sd, bgLayers, vram, palR, palG, palB, data, layerVisible, bgZ, zBuf) {
   const rowBase = y * 256;
 
-  // Render BG layers back-to-front (highest layer index first = furthest back).
-  // Layer 3 → 2 → 1 → 0 so BG1 (index 0) wins over BG2 etc.
-  for (let l = 3; l >= 0; l--) {
+  for (let l = 0; l < 4; l++) {
+    if (layerVisible && layerVisible[`bg${l}`] === false) continue;
     const layer = bgLayers[l];
     if (!layer || !layer.enabled) continue;
 
@@ -213,6 +220,7 @@ function _renderBGRow(y, mode, sd, bgLayers, vram, palR, palG, palB, data) {
 
     let prevTileCol = -1;
     let tileNum = 0, palette = 0, flipH = false, flipV = false, cgBase = 0;
+    let tileZ = -1;
 
     for (let x = 0; x < 256; x++) {
       const mapX    = ((x + scrollX) % mapPxW + mapPxW) % mapPxW;
@@ -226,10 +234,14 @@ function _renderBGRow(y, mode, sd, bgLayers, vram, palR, palG, palB, data) {
         const entry = vram[(tilemapAdr + qColOff + qRowOff + (localRow << 5) + localCol) & 0x7fff];
         tileNum = entry & 0x3ff;
         palette = (entry >> 10) & 0x7;
+        const prio13 = (entry >> 13) & 0x1;
         flipH   = (entry & 0x4000) > 0;
         flipV   = (entry & 0x8000) > 0;
         cgBase  = bpp >= 8 ? 0 : palette * (1 << bpp);
+        tileZ   = bgZ[l * 2 + prio13];
       }
+
+      if (tileZ < 0) continue;
 
       const px = flipH ? (tileSize - 1 - pixCol) : pixCol;
       const py = flipV ? (tileSize - 1 - pixRow) : pixRow;
@@ -247,6 +259,8 @@ function _renderBGRow(y, mode, sd, bgLayers, vram, palR, palG, palB, data) {
       }
 
       if (ci !== 0) {
+        if (tileZ <= zBuf[x]) continue;
+        zBuf[x] = tileZ;
         const dest = (rowBase + x) * 4;
         const cgIdx = (cgBase + ci) & 0xff;
         data[dest]     = palR[cgIdx];
@@ -256,4 +270,10 @@ function _renderBGRow(y, mode, sd, bgLayers, vram, palR, palG, palB, data) {
       }
     }
   }
+}
+
+function _bgZTableForMode(mode, layer3Prio) {
+  if (mode === 0) return BG_Z_TABLE[0];
+  if (mode === 1) return layer3Prio ? BG_Z_TABLE['1l3p'] : BG_Z_TABLE[1];
+  return BG_Z_TABLE.default;
 }

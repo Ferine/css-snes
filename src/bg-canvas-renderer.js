@@ -27,6 +27,7 @@ export class BGCanvasRenderer {
     container.appendChild(this._canvas);
 
     this._ctx = this._canvas.getContext('2d');
+    this._imgData = this._ctx.createImageData(256, 224);
   }
 
   setZIndices(loZ /*, hiZ — canvas renders both priority bands, use loZ */) {
@@ -50,7 +51,7 @@ export class BGCanvasRenderer {
    * @param {string[]}   cgRgb       - decoded CGRAM colors (#RRGGBB, 256 entries)
    * @param {Array|null} scanlineData - per-scanline capture from instrumentSnes
    */
-  update(layer, vram, cgRgb, scanlineData) {
+  update(layer, vram, cgRgb, scanlineData, palR, palG, palB) {
     const {
       layerIdx, bpp, tilemapAdr, tileAdr, bigTiles,
       tilemapWidth: tmW, tilemapHeight: tmH,
@@ -63,18 +64,7 @@ export class BGCanvasRenderer {
     const mapPxW       = tmW * tileSize;
     const mapPxH       = tmH * tileSize;
 
-    // Pre-decode all 256 CGRAM entries to R/G/B arrays (avoids parseInt per pixel)
-    const palR = new Uint8Array(256);
-    const palG = new Uint8Array(256);
-    const palB = new Uint8Array(256);
-    for (let i = 0; i < 256; i++) {
-      const c = cgRgb[i];
-      palR[i] = parseInt(c.slice(1, 3), 16);
-      palG[i] = parseInt(c.slice(3, 5), 16);
-      palB[i] = parseInt(c.slice(5, 7), 16);
-    }
-
-    const imgData = this._ctx.createImageData(256, 224);
+    const imgData = this._imgData;
     const data    = imgData.data;
 
     for (let y = 0; y < 224; y++) {

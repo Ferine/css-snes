@@ -57,6 +57,35 @@ function colorMathFilter(cm, layerIdx) {
   return { filter: '', opacity: '' };
 }
 
+function clipPathForScanlineMask(scanlineData, keepRow) {
+  if (!scanlineData) return '';
+
+  const runs = [];
+  let start = -1;
+  for (let y = 0; y <= 224; y++) {
+    const keep = y < 224 && keepRow(scanlineData[y], y);
+    if (keep) {
+      if (start < 0) start = y;
+    } else if (start >= 0) {
+      runs.push([start, y - 1]);
+      start = -1;
+    }
+  }
+
+  if (runs.length === 0) return 'inset(0 0 0 256px)';
+  if (runs.length === 1) {
+    const [top, bot] = runs[0];
+    if (top === 0 && bot === 223) return '';
+    return `inset(${top}px 0 ${223 - bot}px 0)`;
+  }
+
+  const polys = [];
+  for (const [top, bot] of runs) {
+    polys.push(`0px ${top}px`, `256px ${top}px`, `256px ${bot + 1}px`, `0px ${bot + 1}px`);
+  }
+  return `polygon(evenodd, ${polys.join(', ')})`;
+}
+
 export class CSSRenderer {
   constructor(wrapperEl) {
     this.wrapper = wrapperEl;
@@ -91,6 +120,7 @@ export class CSSRenderer {
 
     this.frameCount  = 0;
     this._prevModeKey = null;
+    this._mode7OffFrames = 0; // hysteresis counter for compositor path
 
     // Apply default z-indices immediately
     this._applyZTables('default');
@@ -104,6 +134,11 @@ export class CSSRenderer {
     if (ppuState.forcedBlank) {
       this.viewport.style.backgroundColor = '#000';
       this.viewport.style.filter = '';
+      for (const bg of this.bgLayers) bg.hide();
+      for (const bg of this.bgCanvasLayers) bg.hide();
+      this.mode7Layer.hide();
+      this.compositor.hide();
+      this.spriteLayer.spriteLayer.style.display = 'none';
       return;
     }
 
@@ -130,21 +165,47 @@ export class CSSRenderer {
 
     // 4. Update layers based on PPU mode
     // Default path: compositor for any frame touching mode 7 (accurate scanline routing).
-    // Optional path: CSS-only mode 7 approximation (no compositor) for pure mode 7 only.
-    // Mixed mode-1/mode-7 scanline frames remain compositor-driven to avoid cross-mode garbling.
+    // Optional path: mode7CssOnly routes mode-7 rows through CSS approximation while
+    // keeping non-mode7 rows compositor-driven in mixed frames.
     const hasMode7Rows = hasMode7Scanlines(ppuState.scanlineData);
     const mixedMode7Frame = hasMode7Rows && ppuState.mode !== 7;
-    const useScanlineCompositor = mixedMode7Frame
-      || (!this.mode7CssOnly && (hasMode7Rows || ppuState.mode === 7));
+    const frameHasMode7 = hasMode7Rows || ppuState.mode === 7;
+    const useHybridCssMode7 = this.mode7CssOnly && mixedMode7Frame;
 
-    if (useScanlineCompositor) {
+    // Hysteresis: stay on compositor for a few frames after mode7 disappears
+    // to avoid single-frame flashes during brief mode transitions.
+    if (frameHasMode7) {
+      this._mode7OffFrames = 0;
+    } else {
+      this._mode7OffFrames++;
+    }
+    const useScanlineCompositor = (frameHasMode7 || this._mode7OffFrames <= 3) && !this.mode7CssOnly;
+
+    if (useHybridCssMode7) {
+      for (const bg of this.bgLayers) bg.hide();
+      for (const bg of this.bgCanvasLayers) bg.hide();
+      this.compositor.show();
+      const clip = clipPathForScanlineMask(
+        ppuState.scanlineData,
+        (sd) => !sd || sd.mode !== 7,
+      );
+      this.compositor.setClipPath(clip);
+      this.compositor.update(ppuState, { layerVisible: this.layerVisible });
+      if (this.layerVisible.bg0) {
+        this.mode7Layer.update(ppuState, { forceCss: true });
+      } else {
+        this.mode7Layer.hide();
+      }
+    } else if (useScanlineCompositor) {
       for (const bg of this.bgLayers) bg.hide();
       for (const bg of this.bgCanvasLayers) bg.hide();
       this.mode7Layer.hide();
       this.compositor.show();
-      this.compositor.update(ppuState);
+      this.compositor.setClipPath('');
+      this.compositor.update(ppuState, { layerVisible: this.layerVisible });
     } else {
       this.compositor.hide();
+      this.compositor.setClipPath('');
       const useMode7Layer = ppuState.mode === 7 || hasMode7Rows;
 
       if (useMode7Layer) {
@@ -163,14 +224,18 @@ export class CSSRenderer {
             } else if (hasHdmaScroll(ppuState.scanlineData, l)) {
               this.bgLayers[l].hide();
               this.bgCanvasLayers[l].show();
-              this.bgCanvasLayers[l].update(layer, ppuState.vram, ppuState.cgRgb, ppuState.scanlineData);
+              this.bgCanvasLayers[l].update(layer, ppuState.vram, ppuState.cgRgb, ppuState.scanlineData, ppuState.palR, ppuState.palG, ppuState.palB);
             } else {
               this.bgCanvasLayers[l].hide();
               this.bgLayers[l].update(layer, this.tileCache, ppuState.vram, ppuState);
             }
           }
         }
-        this.mode7Layer.update(ppuState, { forceCss: this.mode7CssOnly });
+        if (this.layerVisible.bg0) {
+          this.mode7Layer.update(ppuState, { forceCss: this.mode7CssOnly });
+        } else {
+          this.mode7Layer.hide();
+        }
       } else {
         this.mode7Layer.hide();
         for (let l = 0; l < 4; l++) {
@@ -181,7 +246,7 @@ export class CSSRenderer {
           } else if (hasHdmaScroll(ppuState.scanlineData, l)) {
             this.bgLayers[l].hide();
             this.bgCanvasLayers[l].show();
-            this.bgCanvasLayers[l].update(layer, ppuState.vram, ppuState.cgRgb, ppuState.scanlineData);
+            this.bgCanvasLayers[l].update(layer, ppuState.vram, ppuState.cgRgb, ppuState.scanlineData, ppuState.palR, ppuState.palG, ppuState.palB);
           } else {
             this.bgCanvasLayers[l].hide();
             this.bgLayers[l].update(layer, this.tileCache, ppuState.vram, ppuState);

@@ -29,6 +29,9 @@ const SPRITE_SIZES = [
 export class PPUStateExtractor {
   constructor(snes) {
     this.snes = snes;
+    this._palR = new Uint8Array(256);
+    this._palG = new Uint8Array(256);
+    this._palB = new Uint8Array(256);
   }
 
   extract() {
@@ -42,6 +45,11 @@ export class PPUStateExtractor {
 
       // Decoded CGRAM as #RRGGBB strings (all 256 entries)
       cgRgb: this._decodeCgram(ppu.cgram),
+
+      // Pre-decoded palette as typed arrays (avoids parseInt/slice in hot loops)
+      palR: this._palR,
+      palG: this._palG,
+      palB: this._palB,
 
       // BG mode
       mode,
@@ -102,8 +110,14 @@ export class PPUStateExtractor {
 
   _decodeCgram(cgram) {
     const out = new Array(256);
+    const pR = this._palR, pG = this._palG, pB = this._palB;
     for (let i = 0; i < 256; i++) {
-      out[i] = _cgwordToRgb(cgram[i]);
+      const word = cgram[i];
+      const r = ((word & 0x1f) * 255 / 31 + 0.5) | 0;
+      const g = (((word >> 5) & 0x1f) * 255 / 31 + 0.5) | 0;
+      const b = (((word >> 10) & 0x1f) * 255 / 31 + 0.5) | 0;
+      pR[i] = r; pG[i] = g; pB[i] = b;
+      out[i] = `#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${b.toString(16).padStart(2, '0')}`;
     }
     return out;
   }

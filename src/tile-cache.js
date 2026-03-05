@@ -47,6 +47,9 @@ export class TileCache {
 
     // Update sprite sheets
     this._updateSpriteSheets(vram, cgRgb, sprAdr1, sprAdr2, objSize);
+
+    // Rebuild stylesheet once if any sheets changed (not per-layer)
+    if (this.updatedSets.size > 0) this._rebuildStylesheet();
   }
 
   /**
@@ -81,8 +84,17 @@ export class TileCache {
     return this.updatedSets.has(`bg${layerIdx}-${palGroup}`);
   }
 
-  sprSheetUpdated(palGroup) {
-    return this.updatedSets.has(`spr-${palGroup}`);
+  /**
+   * Check if a sprite palette sheet was updated this frame.
+   * If only one argument is provided, checks both name tables for that palette.
+   * If two args are provided, checks a specific name table (0 or 1).
+   */
+  sprSheetUpdated(nameTableOrPalGroup, palGroup) {
+    if (typeof palGroup === 'number') {
+      return this.updatedSets.has(`spr${nameTableOrPalGroup}-${palGroup}`);
+    }
+    const pal = nameTableOrPalGroup;
+    return this.updatedSets.has(`spr0-${pal}`) || this.updatedSets.has(`spr1-${pal}`);
   }
 
   // --- Private ---
@@ -125,8 +137,6 @@ export class TileCache {
       this.updatedSets.add(`bg${layerIdx}-${pal}`);
     }
 
-    if (this.updatedSets.size > 0) this._rebuildStylesheet();
-
     set.lastFrame = this._frameSeq;
     set.prevCgBase = new Array(nPal).fill(0).map((_, p) =>
       _snapshotPalette(cgRgb, bpp >= 8 ? 0 : p * (1 << bpp), 1 << bpp)
@@ -165,7 +175,6 @@ export class TileCache {
       this.updatedSets.add(`spr${nt}-${pal}`);
     }
 
-    if (this.updatedSets.size > 0) this._rebuildStylesheet();
     set.lastFrame = this._frameSeq;
   }
 

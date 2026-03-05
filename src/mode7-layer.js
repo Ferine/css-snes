@@ -24,6 +24,7 @@ export class Mode7Layer {
       'position:absolute;top:0;left:0;image-rendering:pixelated;z-index:1;display:none;';
     container.appendChild(this._swCanvas);
     this._swCtx = this._swCanvas.getContext('2d');
+    this._swImgData = this._swCtx.createImageData(256, 224);
 
     // --- CSS fallback: perspective + CSS plane (image source generated offscreen) ---
     this._perspEl = document.createElement('div');
@@ -40,6 +41,8 @@ export class Mode7Layer {
     this._rowsRoot.style.display = 'none';
     this._perspEl.appendChild(this._rowsRoot);
     this._rows = new Array(224);
+    this._prevRowTransforms = new Array(224).fill('');
+    this._prevRowVisible = new Array(224).fill(false);
     for (let y = 0; y < 224; y++) {
       const row = document.createElement('div');
       row.className = 'mode7-row';
@@ -55,9 +58,12 @@ export class Mode7Layer {
     this._tilemapCanvas.width  = 1024;
     this._tilemapCanvas.height = 1024;
     this._tilemapCtx = this._tilemapCanvas.getContext('2d');
+    this._tilemapImgData = this._tilemapCtx.createImageData(1024, 1024);
+    this._tilemapIndexMap = new Uint8Array(1024 * 1024);
 
     this._prevMapHash = -1;
     this._prevPalHash = -1;
+    this._prevMapBlobUrl = null;
     this._prevClip    = '';
     this._enabled     = false;
   }
@@ -70,7 +76,7 @@ export class Mode7Layer {
    */
   update(ppuState, options = {}) {
     const { forceCss = false } = options;
-    const { mode, mode7, vram, cgRgb, forcedBlank, scanlineData } = ppuState;
+    const { mode, mode7, vram, cgRgb, palR, palG, palB, forcedBlank, scanlineData } = ppuState;
     const hasMode7Rows = _hasMode7Scanlines(scanlineData);
 
     if (forcedBlank || (mode !== 7 && !hasMode7Rows)) {
@@ -81,22 +87,22 @@ export class Mode7Layer {
     this._enabled = true;
 
     const canUseSoftware = !!scanlineData && hasMode7Rows;
-    const hasMode7Hdma = _hasMode7Hdma(scanlineData);
-    const useSoftware = canUseSoftware && (!forceCss || hasMode7Hdma);
+    const useSoftware = canUseSoftware && !forceCss;
     if (useSoftware) {
       // Software path: accurate per-scanline rasterizer
       this._perspEl.style.display = 'none';
       this._swCanvas.style.display = '';
-      this._renderSoftware(vram, cgRgb, mode7, scanlineData);
+      this._renderSoftware(vram, palR, palG, palB, mode7, scanlineData);
     } else {
       // CSS fallback path
       this._swCanvas.style.display = 'none';
       this._perspEl.style.display = '';
 
       const mapHash = _hashVramRange(vram, 0, 0x4000);
-      const palHash = _hashPalette(cgRgb);
+      const palHash = _hashMode7Palette(palR, palG, palB, vram, this._tilemapIndexMap, this._prevMapHash === mapHash);
       if (mapHash !== this._prevMapHash || palHash !== this._prevPalHash) {
-        this._renderTilemap(vram, cgRgb);
+        const vramChanged = mapHash !== this._prevMapHash;
+        this._renderTilemap(vram, palR, palG, palB, vramChanged);
         this._prevMapHash = mapHash;
         this._prevPalHash = palHash;
       }
@@ -132,46 +138,26 @@ export class Mode7Layer {
    * Render 256×224 pixels directly, one scanline at a time, using per-scanline
    * mode 7 matrix parameters. Mirrors pipu.js generateMode7Coords/getMode7Pixel.
    */
-  _renderSoftware(vram, cgRgb, frameMode7, scanlineData) {
+  _renderSoftware(vram, palR, palG, palB, frameMode7, scanlineData) {
     const { largeField, char0fill, flipX, flipY } = frameMode7;
 
-    // Pre-decode 256-entry palette to R/G/B
-    const palR = new Uint8Array(256);
-    const palG = new Uint8Array(256);
-    const palB = new Uint8Array(256);
-    for (let i = 0; i < 256; i++) {
-      const c = cgRgb[i];
-      palR[i] = parseInt(c.slice(1, 3), 16);
-      palG[i] = parseInt(c.slice(3, 5), 16);
-      palB[i] = parseInt(c.slice(5, 7), 16);
-    }
-
-    const imgData = this._swCtx.createImageData(256, 224);
+    const imgData = this._swImgData;
     const data    = imgData.data;
-    const bdR = palR[0];
-    const bdG = palG[0];
-    const bdB = palB[0];
+    const u32     = new Uint32Array(data.buffer);
+
+    const bdPixel    = (255 << 24) | (palB[0] << 16) | (palG[0] << 8) | palR[0];
+    const zeroPixel  = 0; // fully transparent
 
     for (let y = 0; y < 224; y++) {
       const sd = scanlineData?.[y];
       if (sd && sd.mode !== 7) {
-        const rowBase = y * 256;
-        for (let x = 0; x < 256; x++) {
-          data[(rowBase + x) * 4 + 3] = 0;
-        }
+        u32.fill(zeroPixel, y * 256, (y + 1) * 256);
         continue;
       }
       const m = sd && typeof sd.mode7A === 'number' ? sd : frameMode7AsM7(frameMode7);
 
       // Mode 7 scanlines are fully resolved against backdrop in this pass.
-      const rowBase = y * 256;
-      for (let x = 0; x < 256; x++) {
-        const dest = (rowBase + x) * 4;
-        data[dest]     = bdR;
-        data[dest + 1] = bdG;
-        data[dest + 2] = bdB;
-        data[dest + 3] = 255;
-      }
+      u32.fill(bdPixel, y * 256, (y + 1) * 256);
 
       // SnesJs calls generateMode7Coords(yPos) where yPos = y+1 for the first visible row.
       const yPos = y + 1;
@@ -242,40 +228,49 @@ export class Mode7Layer {
 
   // --- CSS fallback ---
 
-  _renderTilemap(vram, cgRgb) {
+  _renderTilemap(vram, palR, palG, palB, vramChanged) {
     const ctx = this._tilemapCtx;
-    const imgData = ctx.createImageData(1024, 1024);
+    const imgData = this._tilemapImgData;
     const data    = imgData.data;
+    const indexMap = this._tilemapIndexMap;
 
-    const r = new Uint8Array(256);
-    const g = new Uint8Array(256);
-    const b = new Uint8Array(256);
-    for (let i = 0; i < 256; i++) {
-      const hex = cgRgb[i];
-      r[i] = parseInt(hex.slice(1, 3), 16);
-      g[i] = parseInt(hex.slice(3, 5), 16);
-      b[i] = parseInt(hex.slice(5, 7), 16);
+    // Phase 1: Rebuild index map from VRAM (expensive bitplane decode) — skip if only palette changed
+    if (vramChanged) {
+      for (let ty = 0; ty < 128; ty++) {
+        for (let tx = 0; tx < 128; tx++) {
+          const mapAddr = (ty * 128 + tx) & 0x7fff;
+          const tileNum = vram[mapAddr] & 0xff;
+          const tileBase = tileNum * 64;
+          const baseX    = tx * 8;
+          const baseY    = ty * 8;
+
+          for (let py = 0; py < 8; py++) {
+            const rowBase = (tileBase + py * 8) & 0x7fff;
+            const idxRow  = (baseY + py) * 1024 + baseX;
+            for (let px = 0; px < 8; px++) {
+              indexMap[idxRow + px] = (vram[(rowBase + px) & 0x7fff] >> 8) & 0xff;
+            }
+          }
+        }
+      }
     }
 
+    // Phase 2: Map indices → RGBA using current palette
     for (let ty = 0; ty < 128; ty++) {
       for (let tx = 0; tx < 128; tx++) {
-        const mapAddr = (ty * 128 + tx) & 0x7fff;
-        const tileNum = vram[mapAddr] & 0xff;
-        const tileBase = tileNum * 64;
-        const baseX    = tx * 8;
-        const baseY    = ty * 8;
-
+        const baseX = tx * 8;
+        const baseY = ty * 8;
         for (let py = 0; py < 8; py++) {
-          const rowBase = (tileBase + py * 8) & 0x7fff;
+          const idxRow = (baseY + py) * 1024 + baseX;
           for (let px = 0; px < 8; px++) {
-            const ci   = (vram[(rowBase + px) & 0x7fff] >> 8) & 0xff;
-            const dest = ((baseY + py) * 1024 + baseX + px) * 4;
+            const ci   = indexMap[idxRow + px];
+            const dest = (idxRow + px) * 4;
             if (ci === 0) {
               data[dest + 3] = 0;
             } else {
-              data[dest]     = r[ci];
-              data[dest + 1] = g[ci];
-              data[dest + 2] = b[ci];
+              data[dest]     = palR[ci];
+              data[dest + 1] = palG[ci];
+              data[dest + 2] = palB[ci];
               data[dest + 3] = 255;
             }
           }
@@ -284,8 +279,15 @@ export class Mode7Layer {
     }
 
     ctx.putImageData(imgData, 0, 0);
-    const mapUrl = `url("${this._tilemapCanvas.toDataURL('image/png')}")`;
-    this._perspEl.style.setProperty('--m7-map-url', mapUrl);
+    // Use blob URL instead of toDataURL to avoid synchronous PNG encode.
+    // Revoke the old URL only AFTER the new one is ready to avoid flicker.
+    this._tilemapCanvas.toBlob((blob) => {
+      if (!blob) return;
+      const url = URL.createObjectURL(blob);
+      if (this._prevMapBlobUrl) URL.revokeObjectURL(this._prevMapBlobUrl);
+      this._prevMapBlobUrl = url;
+      this._perspEl.style.setProperty('--m7-map-url', `url("${url}")`);
+    });
   }
 
   _applyTransform(m7) {
@@ -376,7 +378,10 @@ export class Mode7Layer {
       const sd = scanlineData[y];
       const slot = this._rows[y];
       if (!sd || sd.mode !== 7) {
-        slot.row.style.display = 'none';
+        if (this._prevRowVisible[y]) {
+          slot.row.style.display = 'none';
+          this._prevRowVisible[y] = false;
+        }
         continue;
       }
 
@@ -387,7 +392,10 @@ export class Mode7Layer {
       const vy = rc.stepY / 256;
       const denom = vx * vx + vy * vy;
       if (denom < 1e-8) {
-        slot.row.style.display = 'none';
+        if (this._prevRowVisible[y]) {
+          slot.row.style.display = 'none';
+          this._prevRowVisible[y] = false;
+        }
         continue;
       }
 
@@ -401,9 +409,16 @@ export class Mode7Layer {
       const tx = _clamp(-(a * mx0 + c * my0), -8192, 8192);
       const ty = _clamp(-(b * mx0 + d * my0), -8192, 8192);
 
-      slot.plane.style.transform =
+      const xform =
         `matrix(${a.toFixed(6)}, ${b.toFixed(6)}, ${c.toFixed(6)}, ${d.toFixed(6)}, ${tx.toFixed(3)}, ${ty.toFixed(3)})`;
-      slot.row.style.display = '';
+      if (xform !== this._prevRowTransforms[y]) {
+        slot.plane.style.transform = xform;
+        this._prevRowTransforms[y] = xform;
+      }
+      if (!this._prevRowVisible[y]) {
+        slot.row.style.display = '';
+        this._prevRowVisible[y] = true;
+      }
     }
   }
 }
@@ -458,34 +473,35 @@ function _hasMode7Scanlines(scanlineData) {
   return false;
 }
 
-function _hasMode7Hdma(scanlineData) {
-  if (!scanlineData) return false;
-  let base = null;
-  for (let y = 0; y < 224; y++) {
-    const s = scanlineData[y];
-    if (!s || s.mode !== 7 || typeof s.mode7A !== 'number') continue;
-    if (!base) {
-      base = s;
-      continue;
+/**
+ * Hash only the palette entries actually used by the current mode7 index map.
+ * This avoids full tilemap rebuilds when HUD/sprite palette entries change.
+ * If the index map isn't populated yet (first frame), hashes all 256 entries.
+ */
+function _hashMode7Palette(palR, palG, palB, vram, indexMap, hasIndexMap) {
+  // Build a set of used color indices from the index map
+  const used = new Uint8Array(256);
+  if (hasIndexMap) {
+    for (let ty = 0; ty < 128; ty++) {
+      for (let tx = 0; tx < 128; tx++) {
+        const base = ty * 8 * 1024 + tx * 8;
+        for (let py = 0; py < 8; py++) {
+          const row = base + py * 1024;
+          for (let px = 0; px < 8; px++) {
+            used[indexMap[row + px]] = 1;
+          }
+        }
+      }
     }
-    if (s.mode7A !== base.mode7A || s.mode7B !== base.mode7B ||
-        s.mode7C !== base.mode7C || s.mode7D !== base.mode7D ||
-        s.mode7X !== base.mode7X || s.mode7Y !== base.mode7Y ||
-        s.mode7Hoff !== base.mode7Hoff || s.mode7Voff !== base.mode7Voff) {
-      return true;
-    }
+  } else {
+    used.fill(1);
   }
-  return false;
-}
-
-function _hashPalette(cgRgb) {
   let h = 0x811c9dc5;
   for (let i = 0; i < 256; i++) {
-    const hex = cgRgb[i];
-    for (let j = 0; j < hex.length; j++) {
-      h ^= hex.charCodeAt(j);
-      h = Math.imul(h, 0x01000193);
-    }
+    if (!used[i]) continue;
+    h ^= palR[i]; h = Math.imul(h, 0x01000193);
+    h ^= palG[i]; h = Math.imul(h, 0x01000193);
+    h ^= palB[i]; h = Math.imul(h, 0x01000193);
   }
   return h >>> 0;
 }
