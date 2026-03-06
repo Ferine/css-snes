@@ -25,6 +25,7 @@ export class Mode7Layer {
     container.appendChild(this._swCanvas);
     this._swCtx = this._swCanvas.getContext('2d');
     this._swImgData = this._swCtx.createImageData(256, 224);
+    this._swPixels = new Uint32Array(this._swImgData.data.buffer);
 
     // --- CSS fallback: perspective + CSS plane (image source generated offscreen) ---
     this._perspEl = document.createElement('div');
@@ -43,10 +44,14 @@ export class Mode7Layer {
     this._rows = new Array(224);
     this._prevRowTransforms = new Array(224).fill('');
     this._prevRowVisible = new Array(224).fill(false);
+    this._prevRowTop = new Int16Array(224).fill(-1);
+    this._prevRowHeight = new Uint16Array(224);
+    this._activeRowSlots = 0;
     for (let y = 0; y < 224; y++) {
       const row = document.createElement('div');
       row.className = 'mode7-row';
       row.style.top = `${y}px`;
+      row.style.display = 'none';
       const plane = document.createElement('div');
       plane.className = 'mode7-row-plane';
       row.appendChild(plane);
@@ -59,13 +64,26 @@ export class Mode7Layer {
     this._tilemapCanvas.height = 1024;
     this._tilemapCtx = this._tilemapCanvas.getContext('2d');
     this._tilemapImgData = this._tilemapCtx.createImageData(1024, 1024);
+    this._tilemapPixels = new Uint32Array(this._tilemapImgData.data.buffer);
     this._tilemapIndexMap = new Uint8Array(1024 * 1024);
+    this._tilemapUsedColors = new Uint8Array(256);
+    this._rgbaPalette = new Uint32Array(256);
+    this._tilemapUsageValid = false;
 
     this._prevMapHash = -1;
     this._prevPalHash = -1;
-    this._prevMapBlobUrl = null;
     this._prevClip    = '';
     this._enabled     = false;
+    this._tilemapTextureReady = false;
+    this._cssFrameCounter = 0;
+    this._lastTilemapUploadFrame = -0x3fffffff;
+    this._paletteUploadCadence = 4;
+    this._tilemapBlobUrl = '';
+    this._tilemapUploadPending = false;
+    this._tilemapUploadDirty = false;
+    this._tilemapUploadVersion = 0;
+    this._tilemapAppliedVersion = 0;
+    this._tilemapFlushWaiters = [];
   }
 
   /**
@@ -78,6 +96,7 @@ export class Mode7Layer {
     const { forceCss = false } = options;
     const { mode, mode7, vram, cgRgb, palR, palG, palB, forcedBlank, scanlineData } = ppuState;
     const hasMode7Rows = _hasMode7Scanlines(scanlineData);
+    const fallbackM7 = frameMode7AsM7(mode7);
 
     if (forcedBlank || (mode !== 7 && !hasMode7Rows)) {
       this.hide();
@@ -92,26 +111,46 @@ export class Mode7Layer {
       // Software path: accurate per-scanline rasterizer
       this._perspEl.style.display = 'none';
       this._swCanvas.style.display = '';
-      this._renderSoftware(vram, palR, palG, palB, mode7, scanlineData);
+      this._renderSoftware(vram, palR, palG, palB, mode7, fallbackM7, scanlineData);
     } else {
       // CSS fallback path
       this._swCanvas.style.display = 'none';
       this._perspEl.style.display = '';
 
+      const cssFrame = ++this._cssFrameCounter;
       const mapHash = _hashVramRange(vram, 0, 0x4000);
-      const palHash = _hashMode7Palette(palR, palG, palB, vram, this._tilemapIndexMap, this._prevMapHash === mapHash);
-      if (mapHash !== this._prevMapHash || palHash !== this._prevPalHash) {
-        const vramChanged = mapHash !== this._prevMapHash;
-        this._renderTilemap(vram, palR, palG, palB, vramChanged);
+      const vramChanged = mapHash !== this._prevMapHash;
+      if (vramChanged) {
+        this._rebuildTilemapIndexMap(vram);
+      }
+      const palHash = _hashMode7Palette(
+        palR,
+        palG,
+        palB,
+        this._tilemapUsedColors,
+        this._tilemapUsageValid,
+        true,
+      );
+      const paletteChanged = palHash !== this._prevPalHash;
+      const shouldUploadPalette = paletteChanged
+        && (cssFrame - this._lastTilemapUploadFrame >= this._paletteUploadCadence);
+      if (vramChanged || !this._tilemapTextureReady || shouldUploadPalette) {
+        this._renderTilemap(palR, palG, palB, { syncUpload: vramChanged || !this._tilemapTextureReady });
+        this._tilemapTextureReady = true;
+        this._lastTilemapUploadFrame = cssFrame;
         this._prevMapHash = mapHash;
         this._prevPalHash = palHash;
+      } else if (vramChanged) {
+        this._prevMapHash = mapHash;
       }
 
-      const useRowMode = !!scanlineData;
+      const useRowMode = !!scanlineData && hasMode7Rows;
       if (useRowMode) {
+        this._perspEl.style.perspective = 'none';
+        this._perspEl.style.perspectiveOrigin = '';
         this._planeEl.style.display = 'none';
         this._rowsRoot.style.display = '';
-        this._renderCssRows(mode7, scanlineData);
+        this._renderCssRows(mode7, fallbackM7, scanlineData);
         this._perspEl.style.clipPath = '';
         this._prevClip = '';
       } else {
@@ -129,7 +168,22 @@ export class Mode7Layer {
     this._perspEl.style.clipPath = '';
     this._prevClip = '';
     this._rowsRoot.style.display = 'none';
+    for (let i = 0; i < this._activeRowSlots; i++) {
+      if (!this._prevRowVisible[i]) continue;
+      this._rows[i].row.style.display = 'none';
+      this._prevRowVisible[i] = false;
+    }
+    this._activeRowSlots = 0;
     this._enabled = false;
+  }
+
+  flush() {
+    if (!this._tilemapUploadPending && this._tilemapAppliedVersion >= this._tilemapUploadVersion) {
+      return Promise.resolve();
+    }
+    return new Promise((resolve) => {
+      this._tilemapFlushWaiters.push(resolve);
+    });
   }
 
   // --- Software rasterizer ---
@@ -138,26 +192,27 @@ export class Mode7Layer {
    * Render 256×224 pixels directly, one scanline at a time, using per-scanline
    * mode 7 matrix parameters. Mirrors pipu.js generateMode7Coords/getMode7Pixel.
    */
-  _renderSoftware(vram, palR, palG, palB, frameMode7, scanlineData) {
+  _renderSoftware(vram, palR, palG, palB, frameMode7, fallbackM7, scanlineData) {
     const { largeField, char0fill, flipX, flipY } = frameMode7;
 
     const imgData = this._swImgData;
-    const data    = imgData.data;
-    const u32     = new Uint32Array(data.buffer);
+    const u32 = this._swPixels;
+    const palette32 = _packPalette32(this._rgbaPalette, palR, palG, palB, false);
 
     const bdPixel    = (255 << 24) | (palB[0] << 16) | (palG[0] << 8) | palR[0];
     const zeroPixel  = 0; // fully transparent
 
     for (let y = 0; y < 224; y++) {
+      const rowBase = y * 256;
       const sd = scanlineData?.[y];
       if (sd && sd.mode !== 7) {
-        u32.fill(zeroPixel, y * 256, (y + 1) * 256);
+        u32.fill(zeroPixel, rowBase, rowBase + 256);
         continue;
       }
-      const m = sd && typeof sd.mode7A === 'number' ? sd : frameMode7AsM7(frameMode7);
+      const m = sd && typeof sd.mode7A === 'number' ? sd : fallbackM7;
 
       // Mode 7 scanlines are fully resolved against backdrop in this pass.
-      u32.fill(bdPixel, y * 256, (y + 1) * 256);
+      u32.fill(bdPixel, rowBase, rowBase + 256);
 
       // SnesJs calls generateMode7Coords(yPos) where yPos = y+1 for the first visible row.
       const yPos = y + 1;
@@ -186,8 +241,6 @@ export class Mode7Layer {
       const stepY = flipX ? -m.mode7C : m.mode7C;
 
       for (let x = 0; x < 256; x++) {
-        const dest = (rowBase + x) * 4;
-
         const px = mapX >> 8;
         const py = mapY >> 8;
         mapX += stepX;
@@ -215,10 +268,7 @@ export class Mode7Layer {
         const colorIdx = (vram[(tileIdx * 64 + pixY * 8 + pixX) & 0x7fff] >> 8) & 0xff;
 
         if (colorIdx !== 0) {
-          data[dest]     = palR[colorIdx];
-          data[dest + 1] = palG[colorIdx];
-          data[dest + 2] = palB[colorIdx];
-          data[dest + 3] = 255;
+          u32[rowBase + x] = palette32[colorIdx];
         }
       }
     }
@@ -228,66 +278,56 @@ export class Mode7Layer {
 
   // --- CSS fallback ---
 
-  _renderTilemap(vram, palR, palG, palB, vramChanged) {
-    const ctx = this._tilemapCtx;
-    const imgData = this._tilemapImgData;
-    const data    = imgData.data;
+  _rebuildTilemapIndexMap(vram) {
     const indexMap = this._tilemapIndexMap;
+    const usedColors = this._tilemapUsedColors;
 
-    // Phase 1: Rebuild index map from VRAM (expensive bitplane decode) — skip if only palette changed
-    if (vramChanged) {
-      for (let ty = 0; ty < 128; ty++) {
-        for (let tx = 0; tx < 128; tx++) {
-          const mapAddr = (ty * 128 + tx) & 0x7fff;
-          const tileNum = vram[mapAddr] & 0xff;
-          const tileBase = tileNum * 64;
-          const baseX    = tx * 8;
-          const baseY    = ty * 8;
+    usedColors.fill(0);
 
-          for (let py = 0; py < 8; py++) {
-            const rowBase = (tileBase + py * 8) & 0x7fff;
-            const idxRow  = (baseY + py) * 1024 + baseX;
-            for (let px = 0; px < 8; px++) {
-              indexMap[idxRow + px] = (vram[(rowBase + px) & 0x7fff] >> 8) & 0xff;
-            }
-          }
-        }
-      }
-    }
-
-    // Phase 2: Map indices → RGBA using current palette
     for (let ty = 0; ty < 128; ty++) {
       for (let tx = 0; tx < 128; tx++) {
-        const baseX = tx * 8;
-        const baseY = ty * 8;
+        const mapAddr = (ty * 128 + tx) & 0x7fff;
+        const tileNum = vram[mapAddr] & 0xff;
+        const tileBase = tileNum * 64;
+        const baseX    = tx * 8;
+        const baseY    = ty * 8;
+
         for (let py = 0; py < 8; py++) {
-          const idxRow = (baseY + py) * 1024 + baseX;
+          const rowBase = (tileBase + py * 8) & 0x7fff;
+          const idxRow  = (baseY + py) * 1024 + baseX;
           for (let px = 0; px < 8; px++) {
-            const ci   = indexMap[idxRow + px];
-            const dest = (idxRow + px) * 4;
-            if (ci === 0) {
-              data[dest + 3] = 0;
-            } else {
-              data[dest]     = palR[ci];
-              data[dest + 1] = palG[ci];
-              data[dest + 2] = palB[ci];
-              data[dest + 3] = 255;
-            }
+            const colorIdx = (vram[(rowBase + px) & 0x7fff] >> 8) & 0xff;
+            indexMap[idxRow + px] = colorIdx;
+            usedColors[colorIdx] = 1;
           }
         }
       }
     }
+    this._tilemapUsageValid = true;
+  }
 
-    ctx.putImageData(imgData, 0, 0);
-    // Use blob URL instead of toDataURL to avoid synchronous PNG encode.
-    // Revoke the old URL only AFTER the new one is ready to avoid flicker.
-    this._tilemapCanvas.toBlob((blob) => {
-      if (!blob) return;
-      const url = URL.createObjectURL(blob);
-      if (this._prevMapBlobUrl) URL.revokeObjectURL(this._prevMapBlobUrl);
-      this._prevMapBlobUrl = url;
-      this._perspEl.style.setProperty('--m7-map-url', `url("${url}")`);
-    });
+  _renderTilemap(palR, palG, palB, { syncUpload = false } = {}) {
+    const palette32 = _packPalette32(this._rgbaPalette, palR, palG, palB, true);
+    const pixels = this._tilemapPixels;
+    const indexMap = this._tilemapIndexMap;
+
+    for (let i = 0; i < indexMap.length; i++) {
+      pixels[i] = palette32[indexMap[i]];
+    }
+
+    this._tilemapCtx.putImageData(this._tilemapImgData, 0, 0);
+    this._tilemapUploadVersion++;
+    if (syncUpload || typeof this._tilemapCanvas.toBlob !== 'function') {
+      this._tilemapUploadDirty = false;
+      const dataUrl = this._tilemapCanvas.toDataURL();
+      this._applyTilemapTextureUrl(dataUrl, false);
+      this._tilemapAppliedVersion = this._tilemapUploadVersion;
+      this._resolveTilemapFlushWaiters();
+      return;
+    }
+
+    this._tilemapUploadDirty = true;
+    this._startTilemapTextureUpload();
   }
 
   _applyTransform(m7) {
@@ -370,56 +410,160 @@ export class Mode7Layer {
     }
   }
 
-  _renderCssRows(frameMode7, scanlineData) {
+  _renderCssRows(frameMode7, fallbackM7, scanlineData) {
     const { flipX, flipY } = frameMode7;
-    const sy = 0.02;
-
+    const rowInfo = new Array(224);
     for (let y = 0; y < 224; y++) {
       const sd = scanlineData[y];
-      const slot = this._rows[y];
-      if (!sd || sd.mode !== 7) {
-        if (this._prevRowVisible[y]) {
-          slot.row.style.display = 'none';
-          this._prevRowVisible[y] = false;
-        }
+      if (!sd || sd.mode !== 7) continue;
+      const m = sd.mode7A != null ? sd : fallbackM7;
+      rowInfo[y] = _mode7RowCoords(y, m, flipX, flipY);
+    }
+
+    let slotIndex = 0;
+    let visibleOffset = 0;
+
+    for (let y = 0; y < 224; ) {
+      const start = rowInfo[y];
+      if (!start) {
+        y++;
         continue;
       }
 
-      const m = sd.mode7A != null ? sd : frameMode7AsM7(frameMode7);
-      const rc = _mode7RowCoords(y, m, flipX, flipY);
+      let height = 1;
+      const maxHeight = _segmentHeightForVisibleOffset(visibleOffset);
+      while (height < maxHeight && y + height < 224 && rowInfo[y + height]) {
+        height++;
+      }
 
-      const vx = rc.stepX / 256;
-      const vy = rc.stepY / 256;
-      const denom = vx * vx + vy * vy;
-      if (denom < 1e-8) {
-        if (this._prevRowVisible[y]) {
-          slot.row.style.display = 'none';
-          this._prevRowVisible[y] = false;
-        }
+      let sumStepX = 0;
+      let sumStepY = 0;
+      for (let i = 0; i < height; i++) {
+        sumStepX += rowInfo[y + i].stepX;
+        sumStepY += rowInfo[y + i].stepY;
+      }
+
+      const ux = (sumStepX / height) / 256;
+      const uy = (sumStepY / height) / 256;
+
+      let vx;
+      let vy;
+      if (height > 1) {
+        const end = rowInfo[y + height - 1];
+        vx = ((end.mapX - start.mapX) / (height - 1)) / 256;
+        vy = ((end.mapY - start.mapY) / (height - 1)) / 256;
+      } else if (rowInfo[y + 1]) {
+        vx = (rowInfo[y + 1].mapX - start.mapX) / 256;
+        vy = (rowInfo[y + 1].mapY - start.mapY) / 256;
+      } else if (y > 0 && rowInfo[y - 1]) {
+        vx = (start.mapX - rowInfo[y - 1].mapX) / 256;
+        vy = (start.mapY - rowInfo[y - 1].mapY) / 256;
+      } else {
+        const len = Math.hypot(ux, uy) || 1;
+        vx = -uy / len;
+        vy = ux / len;
+      }
+
+      let det = ux * vy - uy * vx;
+      if (Math.abs(det) < 1e-8) {
+        const len = Math.hypot(ux, uy) || 1;
+        vx = -uy / len;
+        vy = ux / len;
+        det = ux * vy - uy * vx;
+      }
+      if (Math.abs(det) < 1e-8) {
+        y += height;
+        visibleOffset += height;
         continue;
       }
 
-      const mx0 = rc.mapX / 256;
-      const my0 = rc.mapY / 256;
+      const a = _clamp(vy / det, -64, 64);
+      const b = _clamp(-uy / det, -64, 64);
+      const c = _clamp(-vx / det, -64, 64);
+      const d = _clamp(ux / det, -64, 64);
 
-      const a = _clamp(vx / denom, -8, 8);
-      const c = _clamp(vy / denom, -8, 8);
-      const b = _clamp((-vy * sy) / denom, -8, 8);
-      const d = _clamp((vx * sy) / denom, -8, 8);
-      const tx = _clamp(-(a * mx0 + c * my0), -8192, 8192);
-      const ty = _clamp(-(b * mx0 + d * my0), -8192, 8192);
+      const mx0 = _wrapMapCoord(start.mapX / 256, 1024);
+      const my0 = _wrapMapCoord(start.mapY / 256, 1024);
+      const tx = _clamp(-(a * mx0 + c * my0), -65536, 65536);
+      const ty = _clamp(-(b * mx0 + d * my0), -65536, 65536);
+
+      const slot = this._rows[slotIndex];
+      if (this._prevRowTop[slotIndex] !== y) {
+        slot.row.style.top = `${y}px`;
+        this._prevRowTop[slotIndex] = y;
+      }
+      if (this._prevRowHeight[slotIndex] !== height) {
+        slot.row.style.height = `${height}px`;
+        this._prevRowHeight[slotIndex] = height;
+      }
 
       const xform =
-        `matrix(${a.toFixed(6)}, ${b.toFixed(6)}, ${c.toFixed(6)}, ${d.toFixed(6)}, ${tx.toFixed(3)}, ${ty.toFixed(3)})`;
-      if (xform !== this._prevRowTransforms[y]) {
+        `matrix(${a.toFixed(5)}, ${b.toFixed(5)}, ${c.toFixed(5)}, ${d.toFixed(5)}, ${tx.toFixed(2)}, ${ty.toFixed(2)})`;
+      if (xform !== this._prevRowTransforms[slotIndex]) {
         slot.plane.style.transform = xform;
-        this._prevRowTransforms[y] = xform;
+        this._prevRowTransforms[slotIndex] = xform;
       }
-      if (!this._prevRowVisible[y]) {
+      if (!this._prevRowVisible[slotIndex]) {
         slot.row.style.display = '';
-        this._prevRowVisible[y] = true;
+        this._prevRowVisible[slotIndex] = true;
       }
+
+      slotIndex++;
+      visibleOffset += height;
+      y += height;
     }
+
+    for (let i = slotIndex; i < this._activeRowSlots; i++) {
+      if (!this._prevRowVisible[i]) continue;
+      this._rows[i].row.style.display = 'none';
+      this._prevRowVisible[i] = false;
+    }
+    this._activeRowSlots = slotIndex;
+  }
+
+  _startTilemapTextureUpload() {
+    if (this._tilemapUploadPending) return;
+
+    const version = this._tilemapUploadVersion;
+    this._tilemapUploadDirty = false;
+    this._tilemapUploadPending = true;
+    this._tilemapCanvas.toBlob((blob) => {
+      this._tilemapUploadPending = false;
+
+      if (version >= this._tilemapAppliedVersion) {
+        if (!blob) {
+          const dataUrl = this._tilemapCanvas.toDataURL();
+          this._applyTilemapTextureUrl(dataUrl, false);
+        } else {
+          this._applyTilemapTextureUrl(URL.createObjectURL(blob), true);
+        }
+        this._tilemapAppliedVersion = version;
+      }
+
+      if (this._tilemapUploadDirty || this._tilemapAppliedVersion < this._tilemapUploadVersion) {
+        this._startTilemapTextureUpload();
+      }
+      this._resolveTilemapFlushWaiters();
+    }, 'image/png');
+  }
+
+  _applyTilemapTextureUrl(url, isObjectUrl) {
+    const prevBlobUrl = this._tilemapBlobUrl;
+    this._perspEl.style.setProperty('--m7-map-url', `url("${url}")`);
+    this._tilemapBlobUrl = isObjectUrl ? url : '';
+    if (prevBlobUrl) {
+      URL.revokeObjectURL(prevBlobUrl);
+    }
+  }
+
+  _resolveTilemapFlushWaiters() {
+    if (this._tilemapUploadPending || this._tilemapAppliedVersion < this._tilemapUploadVersion) {
+      return;
+    }
+    if (this._tilemapFlushWaiters.length === 0) return;
+    const waiters = this._tilemapFlushWaiters;
+    this._tilemapFlushWaiters = [];
+    for (const resolve of waiters) resolve();
   }
 }
 
@@ -477,33 +621,26 @@ function _hasMode7Scanlines(scanlineData) {
  * Hash only the palette entries actually used by the current mode7 index map.
  * This avoids full tilemap rebuilds when HUD/sprite palette entries change.
  * If the index map isn't populated yet (first frame), hashes all 256 entries.
+ * CSS mode7 treats palette index 0 as transparent, so callers can skip it.
  */
-function _hashMode7Palette(palR, palG, palB, vram, indexMap, hasIndexMap) {
-  // Build a set of used color indices from the index map
-  const used = new Uint8Array(256);
-  if (hasIndexMap) {
-    for (let ty = 0; ty < 128; ty++) {
-      for (let tx = 0; tx < 128; tx++) {
-        const base = ty * 8 * 1024 + tx * 8;
-        for (let py = 0; py < 8; py++) {
-          const row = base + py * 1024;
-          for (let px = 0; px < 8; px++) {
-            used[indexMap[row + px]] = 1;
-          }
-        }
-      }
-    }
-  } else {
-    used.fill(1);
-  }
+function _hashMode7Palette(palR, palG, palB, usedColors, hasUsage, transparentZero = false) {
   let h = 0x811c9dc5;
   for (let i = 0; i < 256; i++) {
-    if (!used[i]) continue;
+    if (transparentZero && i === 0) continue;
+    if (hasUsage && !usedColors[i]) continue;
     h ^= palR[i]; h = Math.imul(h, 0x01000193);
     h ^= palG[i]; h = Math.imul(h, 0x01000193);
     h ^= palB[i]; h = Math.imul(h, 0x01000193);
   }
   return h >>> 0;
+}
+
+function _packPalette32(target, palR, palG, palB, transparentZero) {
+  target[0] = transparentZero ? 0 : ((255 << 24) | (palB[0] << 16) | (palG[0] << 8) | palR[0]);
+  for (let i = 1; i < 256; i++) {
+    target[i] = (255 << 24) | (palB[i] << 16) | (palG[i] << 8) | palR[i];
+  }
+  return target;
 }
 
 function _clamp(v, lo, hi) {
@@ -544,3 +681,20 @@ function _hashVramRange(vram, start, length) {
   }
   return h >>> 0;
 }
+
+function _wrapMapCoord(value, size) {
+  return ((value % size) + size) % size;
+}
+
+function _segmentHeightForVisibleOffset(offset) {
+  if (offset < 16) return 1;
+  if (offset < 40) return 2;
+  if (offset < 88) return 4;
+  return 8;
+}
+
+export const __mode7Testables = {
+  _hashMode7Palette,
+  _mode7RowCoords,
+  _packPalette32,
+};

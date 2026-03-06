@@ -285,6 +285,10 @@ export class CSSRenderer {
     this.viewport.dataset.mode7CssOnly = this.mode7CssOnly ? '1' : '0';
   }
 
+  async flush() {
+    await this.mode7Layer.flush();
+  }
+
   /**
    * Apply layer visibility without running a full frame (useful when paused).
    */

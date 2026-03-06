@@ -649,6 +649,7 @@ kbd {
   position: absolute;
   inset: 0;
   overflow: hidden;
+  contain: layout paint;
 }
 
 .mode7-row {
@@ -657,6 +658,7 @@ kbd {
   width: 256px;
   height: 1px;
   overflow: hidden;
+  contain: paint;
 }
 
 .mode7-row-plane {

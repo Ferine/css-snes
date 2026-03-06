@@ -88,6 +88,7 @@ window.testHarness = {
       remaining -= batch;
       if (remaining > 0) await new Promise((r) => setTimeout(r, 0));
     }
+    await renderer.flush();
   },
 
   /** Button press (SNES bit numbers: 0=B 1=Y 2=Sel 3=Start 4=Up 5=Down 6=Left 7=Right 8=A 9=X 10=L 11=R) */
