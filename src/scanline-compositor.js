@@ -14,6 +14,7 @@
  *   Mirrors pipu.js generateMode7Coords / getMode7Pixel exactly.
  *   Per-scanline mode7A/B/C/D/X/Y/Hoff/Voff from scanlineData.
  */
+import { Mode7VRAMCache } from './mode7-vram-cache.js';
 
 // bits-per-pixel per BG layer per mode (mirrors ppu-state-extractor.js)
 const BIT_PER_MODE = [
@@ -36,7 +37,7 @@ const BG_Z_TABLE = {
 };
 
 export class ScanlineCompositor {
-  constructor(container) {
+  constructor(container, mode7VramCache = null) {
     this._canvas = document.createElement('canvas');
     this._canvas.width  = 256;
     this._canvas.height = 224;
@@ -45,6 +46,9 @@ export class ScanlineCompositor {
     container.appendChild(this._canvas);
     this._ctx = this._canvas.getContext('2d');
     this._imgData = this._ctx.createImageData(256, 224);
+    this._mode7VramCache = mode7VramCache ?? new Mode7VRAMCache();
+    this._zBuf = new Int16Array(256);
+    this._palette32 = new Uint32Array(256);
     this._prevClip = '';
   }
 
@@ -64,6 +68,8 @@ export class ScanlineCompositor {
   update(ppuState, options = {}) {
     const { vram, bgLayers, mode7, scanlineData, palR, palG, palB } = ppuState;
     const layerVisible = options.layerVisible ?? null;
+    const mode7State = options.mode7State
+      ?? ((ppuState.mode === 7 || hasMode7Scanlines(scanlineData)) ? this._mode7VramCache.ensure(vram) : null);
     const layer3Prio = !!ppuState.layer3Prio;
 
     const imgData = this._imgData;
@@ -75,15 +81,16 @@ export class ScanlineCompositor {
     u32.fill(bdPixel);
 
     const m7 = mode7; // frame-end mode7 (fallback when no per-scanline data)
-    const zBuf = new Int16Array(256);
+    const zBuf = this._zBuf;
+    const palette32 = _packPalette32(this._palette32, palR, palG, palB, false);
 
     for (let y = 0; y < 224; y++) {
       const sd        = scanlineData?.[y];
       const lineMode  = sd?.mode ?? ppuState.mode;
 
       if (lineMode === 7) {
-        if (!layerVisible || layerVisible.bg0 !== false) {
-          _renderMode7Row(y, sd, m7, vram, palR, palG, palB, data);
+        if ((!layerVisible || layerVisible.bg0 !== false) && mode7State) {
+          _renderMode7Row(y, sd, m7, mode7State.indexMap, palette32, u32);
         }
       } else {
         zBuf.fill(0);
@@ -112,7 +119,7 @@ export function hasMode7Scanlines(scanlineData) {
 // Mode 7 per-scanline rendering
 // ---------------------------------------------------------------------------
 
-function _renderMode7Row(y, sd, frameM7, vram, palR, palG, palB, data) {
+function _renderMode7Row(y, sd, frameM7, indexMap, palette32, pixels) {
   // Use per-scanline params if available, fall back to frame-end state
   const m = sd ?? {
     mode7A: frameM7.a, mode7B: frameM7.b, mode7C: frameM7.c, mode7D: frameM7.d,
@@ -146,9 +153,9 @@ function _renderMode7Row(y, sd, frameM7, vram, palR, palG, palB, data) {
   const stepY = flipX ? -m.mode7C : m.mode7C;
 
   const rowBase = y * 256;
+  const zeroPixel = 0;
 
   for (let x = 0; x < 256; x++) {
-    const dest = (rowBase + x) * 4;
     let px = mapX >> 8;
     let py = mapY >> 8;
     mapX += stepX;
@@ -160,23 +167,15 @@ function _renderMode7Row(y, sd, frameM7, vram, palR, palG, palB, data) {
         px &= 0x7;
         py &= 0x7;
       } else {
-        data[dest + 3] = 0;
+        pixels[rowBase + x] = zeroPixel;
         continue;
       }
     }
 
-    const tileX   = (px & 0x3f8) >> 3;
-    const tileY   = (py & 0x3f8) >> 3;
-    const tileIdx = vram[(tileY * 128 + tileX) & 0x7fff] & 0xff;
-    const pixX    = px & 0x7;
-    const pixY    = py & 0x7;
-    const ci      = (vram[(tileIdx * 64 + pixY * 8 + pixX) & 0x7fff] >> 8) & 0xff;
+    const ci = indexMap[((py & 0x3ff) << 10) | (px & 0x3ff)];
 
     if (ci !== 0) {
-      data[dest]     = palR[ci];
-      data[dest + 1] = palG[ci];
-      data[dest + 2] = palB[ci];
-      data[dest + 3] = 255;
+      pixels[rowBase + x] = palette32[ci];
     }
     // else: leave backdrop colour already written
   }
@@ -203,17 +202,22 @@ function _renderBGRow(y, mode, sd, bgLayers, vram, palR, palG, palB, data, layer
     } = layer;
 
     const tileSize     = bigTiles ? 16 : 8;
+    const tileShift    = bigTiles ? 4 : 3;
+    const tileMask     = tileSize - 1;
     const wordsPerTile = bpp * 4;
     const planeGroups  = bpp >> 1;
     const mapPxW       = tmW * tileSize;
     const mapPxH       = tmH * tileSize;
+    const mapPxWMask   = mapPxW - 1;
+    const mapPxHMask   = mapPxH - 1;
 
     const scrollX = sd ? sd.bgHoff[l] : layer.scrollX;
     const scrollY = sd ? sd.bgVoff[l] : layer.scrollY;
 
-    const mapY    = ((y + scrollY) % mapPxH + mapPxH) % mapPxH;
-    const tileRow = (mapY / tileSize) | 0;
-    const pixRow  = mapY % tileSize;
+    // Tilemap dimensions are powers of two, so wrapping can use a bitmask.
+    const mapY    = (y + scrollY) & mapPxHMask;
+    const tileRow = mapY >> tileShift;
+    const pixRow  = mapY & tileMask;
 
     const qRowOff  = tileRow >= 32 ? (tmW > 32 ? 0x800 : 0x400) : 0;
     const localRow = tileRow & 31;
@@ -221,11 +225,11 @@ function _renderBGRow(y, mode, sd, bgLayers, vram, palR, palG, palB, data, layer
     let prevTileCol = -1;
     let tileNum = 0, palette = 0, flipH = false, flipV = false, cgBase = 0;
     let tileZ = -1;
+    let mapX = scrollX & mapPxWMask;
 
     for (let x = 0; x < 256; x++) {
-      const mapX    = ((x + scrollX) % mapPxW + mapPxW) % mapPxW;
-      const tileCol = (mapX / tileSize) | 0;
-      const pixCol  = mapX % tileSize;
+      const tileCol = mapX >> tileShift;
+      const pixCol  = mapX & tileMask;
 
       if (tileCol !== prevTileCol) {
         prevTileCol = tileCol;
@@ -268,6 +272,8 @@ function _renderBGRow(y, mode, sd, bgLayers, vram, palR, palG, palB, data, layer
         data[dest + 2] = palB[cgIdx];
         data[dest + 3] = 255;
       }
+
+      mapX = (mapX + 1) & mapPxWMask;
     }
   }
 }
@@ -276,4 +282,12 @@ function _bgZTableForMode(mode, layer3Prio) {
   if (mode === 0) return BG_Z_TABLE[0];
   if (mode === 1) return layer3Prio ? BG_Z_TABLE['1l3p'] : BG_Z_TABLE[1];
   return BG_Z_TABLE.default;
+}
+
+function _packPalette32(target, palR, palG, palB, transparentZero) {
+  target[0] = transparentZero ? 0 : ((255 << 24) | (palB[0] << 16) | (palG[0] << 8) | palR[0]);
+  for (let i = 1; i < 256; i++) {
+    target[i] = (255 << 24) | (palB[i] << 16) | (palG[i] << 8) | palR[i];
+  }
+  return target;
 }

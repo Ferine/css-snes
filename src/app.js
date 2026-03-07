@@ -5,6 +5,7 @@ import { Snes, instrumentSnes } from 'snesjs';
 import { PPUStateExtractor } from './ppu-state-extractor.js';
 import { CSSRenderer } from './css-renderer.js';
 import { DebugPanels } from './debug-panels.js';
+import { PerfStats } from './perf-stats.js';
 
 // --- State ---
 let snes = null;
@@ -54,6 +55,13 @@ let lastFrameTime = 0;
 let frameCount = 0;
 let fpsAccum = 0;
 let rafId = null;
+const appPerf = new PerfStats([
+  'frame',
+  'runFrame',
+  'extract',
+  'render',
+  'debug',
+]);
 
 const fpsEl    = document.getElementById('fps-counter');
 const modeEl   = document.getElementById('mode-counter');
@@ -82,16 +90,26 @@ function gameLoop(timestamp) {
   lastFrameTime = timestamp;
 
   // Run one SNES frame (synchronous), then extract PPU state
-  snes._scanlineData = new Array(224);
+  const frameStart = performance.now();
+  beginScanlineCapture(snes);
+  let stageStart = performance.now();
   snes.runFrame();
+  appPerf.record('runFrame', performance.now() - stageStart);
+  stageStart = performance.now();
   latestPPUState = extractor.extract();
+  appPerf.record('extract', performance.now() - stageStart);
 
+  stageStart = performance.now();
   if (canvasMode) {
     renderCanvasFrame(latestPPUState);
   } else {
     renderer.renderFrame(latestPPUState);
   }
+  appPerf.record('render', performance.now() - stageStart);
+  stageStart = performance.now();
   debugPanels.update(latestPPUState);
+  appPerf.record('debug', performance.now() - stageStart);
+  appPerf.record('frame', performance.now() - frameStart);
 
   // Update status counters
   modeEl.textContent = `M${latestPPUState.mode}`;
@@ -243,7 +261,7 @@ btnPause.addEventListener('click', () => {
 
 btnStep.addEventListener('click', () => {
   if (!running || !paused) return;
-  snes._scanlineData = new Array(224);
+  beginScanlineCapture(snes);
   snes.runFrame();
   latestPPUState = extractor.extract();
   if (canvasMode) {
@@ -378,6 +396,23 @@ window.snesDebug = {
   get state()    { return latestPPUState; },
   get snes()     { return snes; },
   get renderer() { return renderer; },
+  get perf() {
+    return {
+      app: appPerf.snapshot(),
+      renderer: renderer.getPerfSnapshot(),
+    };
+  },
 };
 
 updateButtonStates();
+
+function beginScanlineCapture(snesInstance) {
+  if (!snesInstance) return null;
+  if (typeof snesInstance.beginScanlineCapture === 'function') {
+    return snesInstance.beginScanlineCapture();
+  }
+  const buffer = snesInstance._scanlineCaptureBuffer ?? new Array(224);
+  snesInstance._scanlineCaptureBuffer = buffer;
+  snesInstance._scanlineData = buffer;
+  return buffer;
+}

@@ -31,6 +31,8 @@ export class SpriteLayer {
     // Pre-create 128 sprite root divs
     this._divs = new Array(128);
     this._subDivs = new Array(128); // array of sub-tile divs per sprite
+    this._prevRootState = new Array(128);
+    this._activeSubTileCounts = new Uint8Array(128);
 
     for (let i = 0; i < 128; i++) {
       const div = document.createElement('div');
@@ -40,6 +42,17 @@ export class SpriteLayer {
       div.style.display = 'none';
       this._divs[i] = div;
       this._subDivs[i] = [];
+      this._prevRootState[i] = {
+        visible: false,
+        left: '',
+        top: '',
+        width: '',
+        height: '',
+        zIndex: '',
+        transform: '',
+        className: 'sprite',
+        backgroundPosition: '',
+      };
       this.spriteLayer.appendChild(div);
     }
   }
@@ -58,26 +71,58 @@ export class SpriteLayer {
 
       const sizePx = spr.sizePx;
       const sizeTiles = sizePx >> 3;
+      const state = this._prevRootState[i];
 
       // Hide if fully off-screen
       if (spr.x >= 256 || spr.x + sizePx <= 0 || spr.y >= 224 || spr.y + sizePx <= 0) {
-        div.style.display = 'none';
+        if (state.visible) {
+          div.style.display = 'none';
+          state.visible = false;
+        }
+        this._setActiveSubTileCount(i, 0);
         continue;
       }
 
-      div.style.display = '';
-      div.style.left    = `${spr.x}px`;
-      div.style.top     = `${spr.y}px`;
-      div.style.width   = `${sizePx}px`;
-      div.style.height  = `${sizePx}px`;
-      div.style.zIndex  = sprZTable ? (sprZTable[spr.priority] ?? 2) : 2;
+      if (!state.visible) {
+        div.style.display = '';
+        state.visible = true;
+      }
+      const left = `${spr.x}px`;
+      if (state.left !== left) {
+        div.style.left = left;
+        state.left = left;
+      }
+      const top = `${spr.y}px`;
+      if (state.top !== top) {
+        div.style.top = top;
+        state.top = top;
+      }
+      const width = `${sizePx}px`;
+      if (state.width !== width) {
+        div.style.width = width;
+        state.width = width;
+      }
+      const height = `${sizePx}px`;
+      if (state.height !== height) {
+        div.style.height = height;
+        state.height = height;
+      }
+      const zIndex = String(sprZTable ? (sprZTable[spr.priority] ?? 2) : 2);
+      if (state.zIndex !== zIndex) {
+        div.style.zIndex = zIndex;
+        state.zIndex = zIndex;
+      }
 
       // Flip transform
       const scaleX = spr.flipH ? -1 : 1;
       const scaleY = spr.flipV ? -1 : 1;
-      div.style.transform = (scaleX !== 1 || scaleY !== 1)
+      const transform = (scaleX !== 1 || scaleY !== 1)
         ? `scale(${scaleX},${scaleY})`
         : '';
+      if (state.transform !== transform) {
+        div.style.transform = transform;
+        state.transform = transform;
+      }
 
       div.dataset.x        = spr.x;
       div.dataset.y        = spr.y;
@@ -90,14 +135,27 @@ export class SpriteLayer {
 
       if (sizeTiles === 1) {
         // 8×8 sprite: single div with background
-        this._clearSubDivs(i);
-        div.className = `sprite ${sprPrefix}-pal-${spr.palette}`;
-        div.style.backgroundPosition = tileCache.getTilePosition(spr.tile);
+        const className = `sprite ${sprPrefix}-pal-${spr.palette}`;
+        if (state.className !== className) {
+          div.className = className;
+          state.className = className;
+        }
+        const backgroundPosition = tileCache.getTilePosition(spr.tile);
+        if (state.backgroundPosition !== backgroundPosition) {
+          div.style.backgroundPosition = backgroundPosition;
+          state.backgroundPosition = backgroundPosition;
+        }
+        this._setActiveSubTileCount(i, 0);
       } else {
         // Multi-tile sprite: grid of 8×8 sub-tile divs
-        div.className = 'sprite sprite-multi';
-        div.style.backgroundImage  = 'none';
-        div.style.backgroundPosition = '';
+        if (state.className !== 'sprite sprite-multi') {
+          div.className = 'sprite sprite-multi';
+          state.className = 'sprite sprite-multi';
+        }
+        if (state.backgroundPosition !== '') {
+          div.style.backgroundPosition = '';
+          state.backgroundPosition = '';
+        }
         this._buildSubDivs(i, spr, sprPrefix, sizeTiles, tileCache);
       }
     }
@@ -108,26 +166,10 @@ export class SpriteLayer {
     this.spriteLayer.style.opacity = opacity;
   }
 
-  _clearSubDivs(i) {
-    for (const d of this._subDivs[i]) d.remove();
-    this._subDivs[i] = [];
-  }
-
   _buildSubDivs(i, spr, sprPrefix, sizeTiles, tileCache) {
-    // Resize if needed
     const needed = sizeTiles * sizeTiles;
-    const current = this._subDivs[i];
-    const div = this._divs[i];
-
-    while (current.length < needed) {
-      const d = document.createElement('div');
-      d.className = 'sprite-tile';
-      div.appendChild(d);
-      current.push(d);
-    }
-    while (current.length > needed) {
-      current.pop().remove();
-    }
+    const current = this._ensureSubDivPool(i, needed);
+    this._setActiveSubTileCount(i, needed);
 
     // spriteTileOffsets from pipu.js: tile index offset for each subtile position
     // For a sizeTiles×sizeTiles sprite, subtile at (col, row) uses tile offset:
@@ -138,12 +180,74 @@ export class SpriteLayer {
         const d       = current[subtile];
         const tileOff = col + row * 16;   // SNES sprite tile stride is 16 tiles
         const t       = (spr.tile + tileOff) & 0xff;
+        const state   = d._spriteState;
+        const className = `sprite-tile ${sprPrefix}-pal-${spr.palette}`;
+        const left = `${col * 8}px`;
+        const top = `${row * 8}px`;
+        const backgroundPosition = tileCache.getTilePosition(t);
 
-        d.className = `sprite-tile ${sprPrefix}-pal-${spr.palette}`;
-        d.style.left = `${col * 8}px`;
-        d.style.top  = `${row * 8}px`;
-        d.style.backgroundPosition = tileCache.getTilePosition(t);
+        if (state.className !== className) {
+          d.className = className;
+          state.className = className;
+        }
+        if (state.left !== left) {
+          d.style.left = left;
+          state.left = left;
+        }
+        if (state.top !== top) {
+          d.style.top = top;
+          state.top = top;
+        }
+        if (state.backgroundPosition !== backgroundPosition) {
+          d.style.backgroundPosition = backgroundPosition;
+          state.backgroundPosition = backgroundPosition;
+        }
+        if (!state.visible) {
+          d.style.display = '';
+          state.visible = true;
+        }
       }
     }
+  }
+
+  _ensureSubDivPool(i, needed) {
+    const current = this._subDivs[i];
+    const div = this._divs[i];
+
+    while (current.length < needed) {
+      const d = document.createElement('div');
+      d.className = 'sprite-tile';
+      d.style.display = 'none';
+      d._spriteState = {
+        visible: false,
+        className: 'sprite-tile',
+        left: '',
+        top: '',
+        backgroundPosition: '',
+      };
+      div.appendChild(d);
+      current.push(d);
+    }
+
+    return current;
+  }
+
+  _setActiveSubTileCount(i, needed) {
+    const current = this._subDivs[i];
+    const prevCount = this._activeSubTileCounts[i];
+    if (prevCount === needed) return;
+
+    if (needed < prevCount) {
+      for (let idx = needed; idx < prevCount; idx++) {
+        const d = current[idx];
+        if (!d) continue;
+        const state = d._spriteState;
+        if (!state.visible) continue;
+        d.style.display = 'none';
+        state.visible = false;
+      }
+    }
+
+    this._activeSubTileCounts[i] = needed;
   }
 }

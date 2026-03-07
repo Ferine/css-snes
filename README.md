@@ -35,11 +35,11 @@ Every frame, in roughly 16ms of pure hubris:
 
 1. **SnesJs** (vendored, ES-module-wrapped) runs the emulated CPU + PPU and updates internal state.
 2. **PPUStateExtractor** reads `snes.ppu.*` and produces a clean snapshot: BG layer configs, 128 sprites, color math, window registers, Mode 7 matrix, and per-scanline data.
-3. **TileCache** decodes VRAM tiles into PNG spritesheets (128×128 grids of 8×8 tiles), injected as data-URL `background-image` rules. Sheets are only regenerated when VRAM or palette data actually changes, because we may be unhinged but we're not wasteful.
-4. **BGLayer** (×4) maintains a CSS grid of `<div>` tiles per BG channel. Each channel has *two* sub-layer roots — one for low-priority tiles (tilemap bit 13 = 0) and one for high-priority (bit 13 = 1). Their z-indices interleave with sprites according to per-mode priority tables. Scroll is applied as `left`/`top` on quadrant divs.
-5. **SpriteLayer** positions 128 pre-created `<div>` sprite elements. Multi-tile sprites (16×16, 32×32, 64×64) are composited from 8×8 sub-divs. Each sprite gets a z-index based on its OAM priority bits.
-6. **Mode7Layer** handles the SNES's signature pseudo-3D effect. When per-scanline Mode 7 data is detected (via HDMA instrumentation), a software rasterizer draws the affine-transformed BG onto a canvas. Otherwise, a CSS 3D perspective fallback is used.
-7. **ScanlineCompositor** handles F-Zero's mid-frame mode switching — the top half of the screen is Mode 1 (sky/city) while the bottom half is Mode 7 (road). It routes each scanline to the correct renderer.
+3. **TileCache** decodes VRAM tiles into PNG spritesheets (128×128 grids of 8×8 tiles), injected as `background-image` rules. Sheets are only regenerated when VRAM or palette data actually changes, because we may be unhinged but we're not wasteful.
+4. **BGLayer** (×4) keeps a *visible tile pool* per BG channel instead of mirroring the full tilemap as DOM. Each channel still has two sub-layer roots — one for low-priority tiles (tilemap bit 13 = 0) and one for high-priority (bit 13 = 1) — but only the viewport-sized working set is remapped each frame.
+5. **SpriteLayer** positions 128 pre-created `<div>` sprite elements. Multi-tile sprites (16×16, 32×32, 64×64) are composited from pooled 8×8 sub-divs rather than recreated every frame. Each sprite gets a z-index based on its OAM priority bits.
+6. **Mode7Layer** handles the SNES's signature pseudo-3D effect. A shared Mode 7 VRAM cache prebuilds the 1024×1024 texel map once per VRAM change; the accurate path samples that cache in software, while the CSS fallback uses a live transformed canvas for the single-plane case and row segments only when scanline approximation is needed.
+7. **ScanlineCompositor** handles F-Zero's mid-frame mode switching — the top half of the screen is Mode 1 (sky/city) while the bottom half is Mode 7 (road). It routes each scanline to the correct renderer and reuses the shared Mode 7 cache.
 
 ### Priority (a.k.a. "the z-index table from hell")
 
@@ -67,11 +67,13 @@ src/
   app.js                 Game loop, ROM loading, input, toolbar wiring
   ppu-state-extractor.js Reads snes.ppu.*, produces PPU state snapshot
   css-renderer.js        Orchestrates all layers; z-index priority tables
-  bg-layer.js            Dual-root BG layer (lo/hi priority sub-layers)
+  bg-layer.js            Dual-root BG layer with viewport-sized tile pools
   bg-canvas-renderer.js  Software BG renderer for HDMA per-scanline scroll
-  sprite-layer.js        128 sprite <div>s with OAM priority z-index
-  mode7-layer.js         Mode 7 software rasterizer + CSS 3D fallback
+  sprite-layer.js        128 sprite <div>s with pooled subtiles
+  mode7-layer.js         Mode 7 software rasterizer + CSS fallback
+  mode7-vram-cache.js    Shared 1024×1024 Mode 7 texel cache
   scanline-compositor.js Per-scanline compositor for mid-frame mode switches
+  perf-stats.js          Rolling p50/p95 timing metrics for app/renderer stages
   tile-cache.js          VRAM → PNG spritesheets (128×128 / 256×256)
   debug-panels.js        Scanline inspector ruler + graph
 styles/
@@ -118,8 +120,11 @@ npm run build        # Vite production build → dist/
 ## Tests
 
 ```sh
+npm test              # Unit tests
 npm run test:e2e     # Playwright E2E (boots F-Zero, pixel-diffs key frames)
 ```
+
+Unit coverage now includes the hot-path renderer infrastructure: scanline capture reuse, shared Mode 7 VRAM caching, Mode 7 helpers, the BG visible-tile pool, sprite pooling, and PPU-state extraction helpers.
 
 The test boots F-Zero for 1000+ frames, navigates through menus to the race track, and pixel-diffs the CSS output against the reference canvas at each checkpoint. Current results:
 
@@ -147,7 +152,7 @@ This is a CSS renderer for a 1990 game console. Expectations should be calibrate
 
 - **Only tested with F-Zero.** Other games may have PPU features or timing quirks we haven't encountered. Mode 0, Mode 2–6, and HiRes modes are structurally supported but not battle-tested. If your favorite game looks wrong, that's a feature request, not a bug. (It's definitely a bug.)
 
-- **Performance varies.** Maintaining hundreds of DOM elements per frame is not what browsers were optimized for. Modern Chrome/Safari handle it well at 60fps. Older hardware or Firefox may struggle. The emulator CPU is the actual bottleneck — the CSS rendering itself is surprisingly fast, because browsers are *very* good at what we're abusing them for.
+- **Performance varies.** The renderer now leans on visible-tile pooling, shared Mode 7 caches, and reuse-heavy sprite/scanline buffers, but it is still a CSS renderer for a 1990 game console. Modern Chrome/Safari handle it well at 60fps on decent hardware. Older hardware or Firefox may still struggle, and the emulator CPU remains a large part of the total frame cost.
 
 ## Why?
 

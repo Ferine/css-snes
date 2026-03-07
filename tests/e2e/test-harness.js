@@ -19,6 +19,17 @@ let frameCount    = 0;
 let ready         = false;
 const errors      = [];
 
+function beginScanlineCapture(snesInstance) {
+  if (!snesInstance) return null;
+  if (typeof snesInstance.beginScanlineCapture === 'function') {
+    return snesInstance.beginScanlineCapture();
+  }
+  const buffer = snesInstance._scanlineCaptureBuffer ?? new Array(224);
+  snesInstance._scanlineCaptureBuffer = buffer;
+  snesInstance._scanlineData = buffer;
+  return buffer;
+}
+
 // Capture unhandled errors
 window.addEventListener('error', (e) => errors.push({ type: 'error', msg: e.message, stack: e.error?.stack }));
 window.addEventListener('unhandledrejection', (e) => errors.push({ type: 'unhandledrejection', msg: String(e.reason) }));
@@ -78,7 +89,7 @@ window.testHarness = {
     while (remaining > 0) {
       const batch = Math.min(remaining, CHUNK);
       for (let i = 0; i < batch; i++) {
-        snes._scanlineData = new Array(224);
+        beginScanlineCapture(snes);
         snes.runFrame();
         latestState = extractor.extract();
         renderer.renderFrame(latestState);

@@ -32,6 +32,9 @@ export class PPUStateExtractor {
     this._palR = new Uint8Array(256);
     this._palG = new Uint8Array(256);
     this._palB = new Uint8Array(256);
+    this._cgRgb = new Array(256).fill('#000000');
+    this._prevCgram = new Uint16Array(256);
+    this._haveDecodedCgram = false;
   }
 
   extract() {
@@ -109,16 +112,19 @@ export class PPUStateExtractor {
   // --- Private helpers ---
 
   _decodeCgram(cgram) {
-    const out = new Array(256);
+    const out = this._cgRgb;
     const pR = this._palR, pG = this._palG, pB = this._palB;
     for (let i = 0; i < 256; i++) {
       const word = cgram[i];
+      if (this._haveDecodedCgram && word === this._prevCgram[i]) continue;
+      this._prevCgram[i] = word;
       const r = ((word & 0x1f) * 255 / 31 + 0.5) | 0;
       const g = (((word >> 5) & 0x1f) * 255 / 31 + 0.5) | 0;
       const b = (((word >> 10) & 0x1f) * 255 / 31 + 0.5) | 0;
       pR[i] = r; pG[i] = g; pB[i] = b;
       out[i] = `#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${b.toString(16).padStart(2, '0')}`;
     }
+    this._haveDecodedCgram = true;
     return out;
   }
 

@@ -553,6 +553,7 @@ kbd {
   left: 0;
   width: 256px;
   height: 224px;
+  overflow: hidden;
 }
 
 .bg-quadrant {
@@ -565,6 +566,7 @@ kbd {
 }
 
 .bg-tile {
+  position: absolute;
   width: 8px;
   height: 8px;
   contain: strict;
@@ -579,14 +581,18 @@ kbd {
   grid-auto-rows: 16px;
 }
 
+.bg-sublayer.big-tiles .bg-tile,
 .bg-quadrant.big-tiles .bg-tile {
   width: 16px;
   height: 16px;
   background-size: 256px 256px;
 }
 
+.bg-sublayer.big-tiles .flip-h,
 .bg-quadrant.big-tiles .flip-h  { transform-origin: 8px 8px; }
+.bg-sublayer.big-tiles .flip-v,
 .bg-quadrant.big-tiles .flip-v  { transform-origin: 8px 8px; }
+.bg-sublayer.big-tiles .flip-hv,
 .bg-quadrant.big-tiles .flip-hv { transform-origin: 8px 8px; }
 
 /* Tile flip */
@@ -638,9 +644,7 @@ kbd {
   left: 0;
   width: 1024px;
   height: 1024px;
-  background-image: var(--m7-map-url);
-  background-repeat: repeat;
-  background-size: 1024px 1024px;
+  display: block;
   image-rendering: pixelated;
   transform-origin: 0 0;
 }

@@ -5780,25 +5780,51 @@ export { Snes };
 
 /**
  * Monkey-patch ppu.renderLine to capture per-scanline PPU state.
- * Call once after snes.reset(true). Before each runFrame(), set
- * snes._scanlineData = new Array(224) to enable capture for that frame.
+ * Call once after snes.reset(true). Before each runFrame(), call
+ * snes.beginScanlineCapture() (or set snes._scanlineData manually) to enable
+ * capture for that frame without allocating a new object graph.
  */
 export function instrumentSnes(snes) {
   const ppu = snes.ppu;
   snes._scanlineData = null;
+  snes._scanlineCaptureBuffer = new Array(224);
+  for (let i = 0; i < 224; i++) {
+    snes._scanlineCaptureBuffer[i] = {
+      mode: 0,
+      bgHoff: new Int16Array(4),
+      bgVoff: new Int16Array(4),
+      mode7A: 0, mode7B: 0,
+      mode7C: 0, mode7D: 0,
+      mode7X: 0, mode7Y: 0,
+      mode7Hoff: 0, mode7Voff: 0,
+    };
+  }
+  snes.beginScanlineCapture = function() {
+    this._scanlineData = this._scanlineCaptureBuffer;
+    return this._scanlineData;
+  };
   const orig = ppu.renderLine.bind(ppu);
   ppu.renderLine = function(line) {
     // Visible lines are yPos 1–224; store at index [line-1] so scanlineData[y] == screen row y.
     if (snes._scanlineData && line >= 1 && line <= 224) {
-      snes._scanlineData[line - 1] = {
-        mode: ppu.mode,
-        bgHoff: [ppu.bgHoff[0], ppu.bgHoff[1], ppu.bgHoff[2], ppu.bgHoff[3]],
-        bgVoff: [ppu.bgVoff[0], ppu.bgVoff[1], ppu.bgVoff[2], ppu.bgVoff[3]],
-        mode7A: ppu.mode7A, mode7B: ppu.mode7B,
-        mode7C: ppu.mode7C, mode7D: ppu.mode7D,
-        mode7X: ppu.mode7X, mode7Y: ppu.mode7Y,
-        mode7Hoff: ppu.mode7Hoff, mode7Voff: ppu.mode7Voff,
-      };
+      const row = snes._scanlineData[line - 1];
+      row.mode = ppu.mode;
+      row.bgHoff[0] = ppu.bgHoff[0];
+      row.bgHoff[1] = ppu.bgHoff[1];
+      row.bgHoff[2] = ppu.bgHoff[2];
+      row.bgHoff[3] = ppu.bgHoff[3];
+      row.bgVoff[0] = ppu.bgVoff[0];
+      row.bgVoff[1] = ppu.bgVoff[1];
+      row.bgVoff[2] = ppu.bgVoff[2];
+      row.bgVoff[3] = ppu.bgVoff[3];
+      row.mode7A = ppu.mode7A;
+      row.mode7B = ppu.mode7B;
+      row.mode7C = ppu.mode7C;
+      row.mode7D = ppu.mode7D;
+      row.mode7X = ppu.mode7X;
+      row.mode7Y = ppu.mode7Y;
+      row.mode7Hoff = ppu.mode7Hoff;
+      row.mode7Voff = ppu.mode7Voff;
     }
     return orig(line);
   };

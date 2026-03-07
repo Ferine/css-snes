@@ -59,22 +59,28 @@ export class BGCanvasRenderer {
     } = layer;
 
     const tileSize     = bigTiles ? 16 : 8;
+    const tileShift    = bigTiles ? 4 : 3;
+    const tileMask     = tileSize - 1;
     const wordsPerTile = bpp * 4;
     const planeGroups  = bpp >> 1;
     const mapPxW       = tmW * tileSize;
     const mapPxH       = tmH * tileSize;
+    const mapPxWMask   = mapPxW - 1;
+    const mapPxHMask   = mapPxH - 1;
 
     const imgData = this._imgData;
     const data    = imgData.data;
 
     for (let y = 0; y < 224; y++) {
+      const rowBase = y * 256;
       const sd = scanlineData?.[y];
       const scrollX = sd ? sd.bgHoff[layerIdx] : frameScrollX;
       const scrollY = sd ? sd.bgVoff[layerIdx] : frameScrollY;
 
-      const mapY    = ((y + scrollY) % mapPxH + mapPxH) % mapPxH;
-      const tileRow = (mapY / tileSize) | 0;
-      const pixRow  = mapY % tileSize;
+      // Tilemap dimensions are powers of two, so wrapping can use a bitmask.
+      const mapY    = (y + scrollY) & mapPxHMask;
+      const tileRow = mapY >> tileShift;
+      const pixRow  = mapY & tileMask;
 
       // Tilemap quadrant row offset
       const qRowOff  = tileRow >= 32 ? (tmW > 32 ? 0x800 : 0x400) : 0;
@@ -82,11 +88,11 @@ export class BGCanvasRenderer {
 
       let prevTileCol = -1;
       let tileNum = 0, palette = 0, flipH = false, flipV = false, cgBase = 0;
+      let mapX = scrollX & mapPxWMask;
 
       for (let x = 0; x < 256; x++) {
-        const mapX    = ((x + scrollX) % mapPxW + mapPxW) % mapPxW;
-        const tileCol = (mapX / tileSize) | 0;
-        const pixCol  = mapX % tileSize;
+        const tileCol = mapX >> tileShift;
+        const pixCol  = mapX & tileMask;
 
         // Re-read tilemap entry when tile column changes
         if (tileCol !== prevTileCol) {
@@ -119,7 +125,7 @@ export class BGCanvasRenderer {
                    |  ((((w >> 8) & 0xff) >> shift) & 1) << (g * 2 + 1);
         }
 
-        const dest = (y * 256 + x) * 4;
+        const dest = (rowBase + x) * 4;
         if (colorIdx === 0) {
           data[dest + 3] = 0;
         } else {
@@ -129,6 +135,8 @@ export class BGCanvasRenderer {
           data[dest + 2] = palB[cgIdx];
           data[dest + 3] = 255;
         }
+
+        mapX = (mapX + 1) & mapPxWMask;
       }
     }
 

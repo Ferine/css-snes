@@ -18,6 +18,8 @@ import { Mode7Layer } from './mode7-layer.js';
 import { SpriteLayer } from './sprite-layer.js';
 import { hasHdmaScroll } from './ppu-state-extractor.js';
 import { ScanlineCompositor, hasMode7Scanlines } from './scanline-compositor.js';
+import { Mode7VRAMCache } from './mode7-vram-cache.js';
+import { PerfStats } from './perf-stats.js';
 
 // Per-mode BG z-index tables: [bg0lo, bg0hi, bg1lo, bg1hi, bg2lo, bg2hi, bg3lo, bg3hi]
 // -1 means layer absent in this mode.
@@ -110,8 +112,9 @@ export class CSSRenderer {
       new BGCanvasRenderer(this.viewport, 2),
       new BGCanvasRenderer(this.viewport, 3),
     ];
-    this.mode7Layer  = new Mode7Layer(this.viewport);
-    this.compositor  = new ScanlineCompositor(this.viewport);
+    this.mode7VramCache = new Mode7VRAMCache();
+    this.mode7Layer  = new Mode7Layer(this.viewport, this.mode7VramCache);
+    this.compositor  = new ScanlineCompositor(this.viewport, this.mode7VramCache);
     this.spriteLayer = new SpriteLayer(this.viewport);
 
     // UI-level layer visibility overrides (independent of PPU enabled flags)
@@ -120,7 +123,15 @@ export class CSSRenderer {
 
     this.frameCount  = 0;
     this._prevModeKey = null;
-    this._mode7OffFrames = 0; // hysteresis counter for compositor path
+    this._mode7OffFrames = 0; // hysteresis countdown for recent mixed mode 7 frames
+    this._lastRenderPath = 'idle';
+    this._perf = new PerfStats([
+      'renderFrame',
+      'tileCache',
+      'layers',
+      'colorMath',
+      'sprites',
+    ]);
 
     // Apply default z-indices immediately
     this._applyZTables('default');
@@ -131,6 +142,7 @@ export class CSSRenderer {
    * @param {object} ppuState - from PPUStateExtractor.extract()
    */
   renderFrame(ppuState) {
+    const frameStart = performance.now();
     if (ppuState.forcedBlank) {
       this.viewport.style.backgroundColor = '#000';
       this.viewport.style.filter = '';
@@ -139,11 +151,16 @@ export class CSSRenderer {
       this.mode7Layer.hide();
       this.compositor.hide();
       this.spriteLayer.spriteLayer.style.display = 'none';
+      this._lastRenderPath = 'forced-blank';
+      this.viewport.dataset.renderPath = this._lastRenderPath;
+      this._perf.record('renderFrame', performance.now() - frameStart);
       return;
     }
 
     // 1. Update tile cache (regenerates spritesheets as needed)
+    let stageStart = performance.now();
     this.tileCache.update(ppuState);
+    this._perf.record('tileCache', performance.now() - stageStart);
 
     // 2. Set viewport background to CGRAM[0] (backdrop color) and apply brightness
     this.viewport.style.backgroundColor = ppuState.cgRgb[0];
@@ -169,19 +186,25 @@ export class CSSRenderer {
     // keeping non-mode7 rows compositor-driven in mixed frames.
     const hasMode7Rows = hasMode7Scanlines(ppuState.scanlineData);
     const mixedMode7Frame = hasMode7Rows && ppuState.mode !== 7;
-    const frameHasMode7 = hasMode7Rows || ppuState.mode === 7;
+    const pureMode7Frame = ppuState.mode === 7 && !mixedMode7Frame;
+    const frameHasMode7 = mixedMode7Frame || pureMode7Frame;
+    const mode7State = frameHasMode7 ? this.mode7VramCache.ensure(ppuState.vram) : null;
     const useHybridCssMode7 = this.mode7CssOnly && mixedMode7Frame;
 
-    // Hysteresis: stay on compositor for a few frames after mode7 disappears
-    // to avoid single-frame flashes during brief mode transitions.
-    if (frameHasMode7) {
+    // Hysteresis: stay on compositor briefly after mixed mode 7 disappears
+    // to avoid single-frame flashes during mid-frame mode transitions.
+    if (mixedMode7Frame) {
+      this._mode7OffFrames = 3;
+    } else if (frameHasMode7) {
       this._mode7OffFrames = 0;
-    } else {
-      this._mode7OffFrames++;
+    } else if (this._mode7OffFrames > 0) {
+      this._mode7OffFrames--;
     }
-    const useScanlineCompositor = (frameHasMode7 || this._mode7OffFrames <= 3) && !this.mode7CssOnly;
+    const useScanlineCompositor = (mixedMode7Frame || (!frameHasMode7 && this._mode7OffFrames > 0)) && !this.mode7CssOnly;
 
+    stageStart = performance.now();
     if (useHybridCssMode7) {
+      this._lastRenderPath = 'hybrid-css-mode7';
       for (const bg of this.bgLayers) bg.hide();
       for (const bg of this.bgCanvasLayers) bg.hide();
       this.compositor.show();
@@ -190,25 +213,29 @@ export class CSSRenderer {
         (sd) => !sd || sd.mode !== 7,
       );
       this.compositor.setClipPath(clip);
-      this.compositor.update(ppuState, { layerVisible: this.layerVisible });
+      this.compositor.update(ppuState, { layerVisible: this.layerVisible, mode7State });
       if (this.layerVisible.bg0) {
-        this.mode7Layer.update(ppuState, { forceCss: true });
+        this.mode7Layer.update(ppuState, { forceCss: true, mode7State });
       } else {
         this.mode7Layer.hide();
       }
     } else if (useScanlineCompositor) {
+      this._lastRenderPath = 'scanline-compositor';
       for (const bg of this.bgLayers) bg.hide();
       for (const bg of this.bgCanvasLayers) bg.hide();
       this.mode7Layer.hide();
       this.compositor.show();
       this.compositor.setClipPath('');
-      this.compositor.update(ppuState, { layerVisible: this.layerVisible });
+      this.compositor.update(ppuState, { layerVisible: this.layerVisible, mode7State });
     } else {
       this.compositor.hide();
       this.compositor.setClipPath('');
       const useMode7Layer = ppuState.mode === 7 || hasMode7Rows;
 
       if (useMode7Layer) {
+        this._lastRenderPath = pureMode7Frame
+          ? (this.mode7CssOnly ? 'mode7-css' : 'mode7-software')
+          : 'mode7-overlay';
         // Pure mode 7 frame: hide normal BG layers (mode 7 plane replaces them).
         if (ppuState.mode === 7) {
           for (const bg of this.bgLayers) bg.hide();
@@ -232,11 +259,12 @@ export class CSSRenderer {
           }
         }
         if (this.layerVisible.bg0) {
-          this.mode7Layer.update(ppuState, { forceCss: this.mode7CssOnly });
+          this.mode7Layer.update(ppuState, { forceCss: this.mode7CssOnly, mode7State });
         } else {
           this.mode7Layer.hide();
         }
       } else {
+        this._lastRenderPath = 'bg-css';
         this.mode7Layer.hide();
         for (let l = 0; l < 4; l++) {
           const layer = ppuState.bgLayers[l];
@@ -254,8 +282,10 @@ export class CSSRenderer {
         }
       }
     }
+    this._perf.record('layers', performance.now() - stageStart);
 
     // 5. Apply color math approximations
+    stageStart = performance.now();
     const cm = ppuState.colorMath;
     for (let l = 0; l < 4; l++) {
       const { filter, opacity } = colorMathFilter(cm, l);
@@ -264,20 +294,25 @@ export class CSSRenderer {
     }
     const { filter: sf, opacity: so } = colorMathFilter(cm, 4);
     this.spriteLayer.setColorMath(sf, so);
+    this._perf.record('colorMath', performance.now() - stageStart);
 
     // 6. Update sprite layer
+    stageStart = performance.now();
     if (this.layerVisible.sprites) {
       this.spriteLayer.spriteLayer.style.display = '';
       this.spriteLayer.update(ppuState, this.tileCache, sprZTable);
     } else {
       this.spriteLayer.spriteLayer.style.display = 'none';
     }
+    this._perf.record('sprites', performance.now() - stageStart);
 
     // 7. Annotate viewport with frame-level metadata for DevTools inspection
     this.viewport.dataset.frame = this.frameCount;
     this.viewport.dataset.mode  = ppuState.mode;
+    this.viewport.dataset.renderPath = this._lastRenderPath;
 
     this.frameCount++;
+    this._perf.record('renderFrame', performance.now() - frameStart);
   }
 
   setMode7CssOnly(enabled) {
@@ -287,6 +322,13 @@ export class CSSRenderer {
 
   async flush() {
     await this.mode7Layer.flush();
+  }
+
+  getPerfSnapshot() {
+    return {
+      renderPath: this._lastRenderPath,
+      metrics: this._perf.snapshot(),
+    };
   }
 
   /**
