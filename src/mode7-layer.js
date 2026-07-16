@@ -12,7 +12,7 @@
  *   vram[tileY*128 + tileX] & 0xff         → tile index (low byte)
  *   (vram[tileIdx*64 + py*8 + px] >> 8) & 0xff → pixel color (high byte)
  */
-import { frameMode7AsM7, mode7RowCoords } from './mode7-homography.js';
+import { fitMode7Homography, frameMode7AsM7, mode7RowCoords } from './mode7-homography.js';
 import { Mode7VRAMCache } from './mode7-vram-cache.js';
 
 export class Mode7Layer {
@@ -86,6 +86,7 @@ export class Mode7Layer {
     this._tilemapUploadVersion = 0;
     this._tilemapAppliedVersion = 0;
     this._tilemapFlushWaiters = [];
+    this._prevHomography = '';
   }
 
   /**
@@ -121,39 +122,50 @@ export class Mode7Layer {
       this._swCanvas.style.display = 'none';
       this._perspEl.style.display = '';
 
-      const useRowMode = !!scanlineData && hasMode7Rows;
       const cssFrame = ++this._cssFrameCounter;
       const mapHash = mode7State.hash;
       const vramChanged = mapHash !== this._prevMapHash;
       const palHash = _hashMode7Palette(
-        palR,
-        palG,
-        palB,
-        mode7State.usedColors,
-        true,
-        true,
+        palR, palG, palB, mode7State.usedColors, true, true,
       );
       const paletteChanged = palHash !== this._prevPalHash;
-      const shouldUploadPalette = paletteChanged
-        && (cssFrame - this._lastTilemapUploadFrame >= this._paletteUploadCadence);
-      const repaintNeeded = vramChanged || paletteChanged || !this._tilemapTextureReady;
-      const rowTextureDue = this._rowTextureStale && (
-        !this._usedRowModeLastFrame
-        || (cssFrame - this._lastTilemapUploadFrame >= this._paletteUploadCadence)
-      );
-      if (repaintNeeded) {
+      if (vramChanged || paletteChanged) {
         this._renderTilemap(mode7State.indexMap, palR, palG, palB, {
           uploadTexture: false,
         });
         this._prevMapHash = mapHash;
         this._prevPalHash = palHash;
+        if (this._tilemapTextureReady) this._rowTextureStale = true;
       }
 
-      if (useRowMode) {
+      const fit = fitMode7Homography(hasMode7Rows ? scanlineData : null, mode7);
+
+      if (fit && fit.ok) {
+        // Single-plane homography: exact wherever the per-scanline params lie
+        // on one projective transform (flat ground plane).
+        this._perspEl.dataset.m7Css = 'homography';
+        this._perspEl.style.perspective = 'none';
+        this._perspEl.style.perspectiveOrigin = '';
+        this._rowsRoot.style.display = 'none';
+        this._planeEl.style.display = '';
+        if (fit.matrix3d !== this._prevHomography) {
+          this._planeEl.style.transform = fit.matrix3d;
+          this._prevHomography = fit.matrix3d;
+        }
+        this._applyScanlineClip(scanlineData);
+        this._usedRowModeLastFrame = false;
+      } else if (scanlineData && hasMode7Rows) {
+        // Row-mode fallback: non-projective HDMA, wrap, or degenerate fits.
+        this._perspEl.dataset.m7Css = 'rows';
         const needsInitialTexture = !this._tilemapTextureReady;
         const needsSyncUpload = vramChanged || needsInitialTexture || !this._usedRowModeLastFrame;
-        const shouldUpload = needsSyncUpload || shouldUploadPalette || rowTextureDue;
-        if (shouldUpload) {
+        const shouldUploadPalette = paletteChanged
+          && (cssFrame - this._lastTilemapUploadFrame >= this._paletteUploadCadence);
+        const rowTextureDue = this._rowTextureStale && (
+          !this._usedRowModeLastFrame
+          || (cssFrame - this._lastTilemapUploadFrame >= this._paletteUploadCadence)
+        );
+        if (needsSyncUpload || shouldUploadPalette || rowTextureDue) {
           this._queueTilemapTextureUpload(needsSyncUpload);
           this._tilemapTextureReady = true;
           this._rowTextureStale = false;
@@ -161,11 +173,6 @@ export class Mode7Layer {
         } else if (paletteChanged) {
           this._rowTextureStale = true;
         }
-      } else if (repaintNeeded && this._tilemapTextureReady) {
-        this._rowTextureStale = true;
-      }
-
-      if (useRowMode) {
         this._perspEl.style.perspective = 'none';
         this._perspEl.style.perspectiveOrigin = '';
         this._planeEl.style.display = 'none';
@@ -173,13 +180,14 @@ export class Mode7Layer {
         this._renderCssRows(mode7, fallbackM7, scanlineData);
         this._perspEl.style.clipPath = '';
         this._prevClip = '';
+        this._usedRowModeLastFrame = true;
       } else {
+        // Degenerate fit with no per-scanline rows: nothing safe to draw.
+        this._perspEl.dataset.m7Css = 'none';
+        this._planeEl.style.display = 'none';
         this._rowsRoot.style.display = 'none';
-        this._planeEl.style.display = '';
-        this._applyTransform(_resolveTransformState(mode7, scanlineData));
-        this._applyScanlineClip(scanlineData);
+        this._usedRowModeLastFrame = false;
       }
-      this._usedRowModeLastFrame = useRowMode;
     }
   }
 
@@ -326,50 +334,6 @@ export class Mode7Layer {
 
     this._tilemapUploadDirty = true;
     this._startTilemapTextureUpload();
-  }
-
-  _applyTransform(m7) {
-    const A = _m7Fixed(m7.a);
-    const B = _m7Fixed(m7.b);
-    const C = _m7Fixed(m7.c);
-    const D = _m7Fixed(m7.d);
-
-    const mapXRaw = ((m7.hoff - m7.x) & 0x7ff) + m7.x;
-    const mapYRaw = ((m7.voff - m7.y) & 0x7ff) + m7.y;
-    const mapX = ((mapXRaw % 1024) + 1024) % 1024;
-    const mapY = ((mapYRaw % 1024) + 1024) % 1024;
-
-    const cx = 128;
-    const cy = 112;
-
-    // Use inverse affine matrix so CSS path can capture rotation/shear as well as scale.
-    // Clamp aggressively to keep approximation stable when determinant is near-zero.
-    const det = A * D - B * C;
-    let ia, ib, ic, id;
-    if (Math.abs(det) > 0.001) {
-      ia = _clamp(D / det, -8, 8);
-      ib = _clamp(-C / det, -8, 8);
-      ic = _clamp(-B / det, -8, 8);
-      id = _clamp(A / det, -8, 8);
-    } else {
-      ia = A !== 0 ? _clamp(1 / A, -8, 8) : 1;
-      ib = 0;
-      ic = 0;
-      id = D !== 0 ? _clamp(1 / D, -8, 8) : 1;
-    }
-
-    const panX = -(mapX - cx);
-    const panY = -(mapY - cy);
-
-    const absD = Math.max(Math.abs(D), 0.001);
-    const perspDepth = Math.max(80, Math.min(1200, Math.round(200 / absD)));
-
-    this._perspEl.style.perspective       = `${perspDepth}px`;
-    this._perspEl.style.perspectiveOrigin = `${cx}px 0px`;
-
-    this._planeEl.style.transform =
-      `translate(${panX}px, ${panY}px) matrix(${ia.toFixed(5)}, ${ib.toFixed(5)}, ${ic.toFixed(5)}, ${id.toFixed(5)}, 0, 0)`;
-    this._planeEl.style.transformOrigin = `${-panX + cx}px ${-panY}px`;
   }
 
   _applyScanlineClip(scanlineData) {
@@ -563,40 +527,6 @@ export class Mode7Layer {
     this._tilemapFlushWaiters = [];
     for (const resolve of waiters) resolve();
   }
-}
-
-function _m7Fixed(raw) {
-  const signed = raw > 0x7fff ? raw - 0x10000 : raw;
-  return signed / 256;
-}
-
-function _resolveTransformState(frameMode7, scanlineData) {
-  if (scanlineData) {
-    let count = 0;
-    let sumA = 0, sumB = 0, sumC = 0, sumD = 0;
-    let sumX = 0, sumY = 0, sumH = 0, sumV = 0;
-    for (let y = 0; y < 224; y++) {
-      const s = scanlineData[y];
-      if (!s || s.mode !== 7) continue;
-      if (typeof s.mode7A !== 'number') continue;
-      sumA += s.mode7A; sumB += s.mode7B; sumC += s.mode7C; sumD += s.mode7D;
-      sumX += s.mode7X; sumY += s.mode7Y; sumH += s.mode7Hoff; sumV += s.mode7Voff;
-      count++;
-    }
-    if (count > 0) {
-      return {
-        a: (sumA / count) | 0,
-        b: (sumB / count) | 0,
-        c: (sumC / count) | 0,
-        d: (sumD / count) | 0,
-        x: (sumX / count) | 0,
-        y: (sumY / count) | 0,
-        hoff: (sumH / count) | 0,
-        voff: (sumV / count) | 0,
-      };
-    }
-  }
-  return frameMode7;
 }
 
 function _hasMode7Scanlines(scanlineData) {
