@@ -49,11 +49,16 @@ Algorithm:
    path for rotation-only games).
 2. **Sample rows** at 25% and 75% of band depth — away from the horizon where the map
    scale explodes, for numerical conditioning.
-3. **Correspondences.** For each sample row, from `_mode7RowCoords`: screen pixel centers
-   `(0.5, y + 0.5)` and `(255.5, y + 0.5)` map to texel centers
-   `(mapX/256 + 0.5, mapY/256 + 0.5)` and the x=255 equivalents. The `+0.5` texel offset
-   makes GPU nearest-neighbor sampling agree with the SNES `>> 8` floor: both pick the
-   texel containing the mapped pixel center wherever the fit is exact.
+3. **Correspondences.** Map space is continuous — canvas texel `k` covers
+   `[k, k+1)` — so GPU nearest sampling (`floor(texcoord)`) matches the SNES
+   `>> 8` floor with no half-texel offset. Row `y`'s affine applies at the
+   row's vertical center `sy = y + 0.5`; along the row the map coordinate is
+   `u(sx) = (mapX + sx·stepX)/256`, sampled at the row edges `sx ∈ {0, 256}`.
+   Because each row is affine in `sx`, a consistent fit has `h31 ≈ 0`.
+   Additionally: hardware wraps map coordinates when `largeField` is false;
+   a single plane cannot wrap, so the fit returns `ok: false` when
+   `largeField` is false and any validated endpoint leaves `[0, 1024)`
+   (row mode wraps correctly via `background-repeat`).
 4. **Solve** the map→screen homography H (h33 = 1, 8 unknowns) from the 4 correspondences
    via an 8×8 Gaussian elimination with partial pivoting (~40 lines, hand-rolled — no
    stdlib/platform/dependency equivalent exists; checked the reuse ladder). Pivot below
@@ -112,8 +117,14 @@ is rejected.
 - `toFixed(8)` keeps ≥4 significant digits on the perspective terms (h31/h32 ~1e-2..1e-5)
   and ~13 on translations; validating with the rounded matrix makes formatting loss
   visible to the `maxError` check rather than silently shipped.
-- Expected residual on F-Zero race frames: sub-pixel (fixed-point truncation wobble plus
-  nearest-neighbor tie-breaks at texel boundaries).
+- Integer HDMA tables carry a quantization noise floor: ±0.5 rounding on the
+  per-row A/D values costs ~`256/A` screen px per texel, amplified ~2× by
+  fit-row leverage. Near 1:1 magnification (A ≈ 256–540) the floor is
+  ~1.4–1.6px — above the gate. **Policy decision (2026-07-16): the gate stays
+  at 1.0px.** Frames whose quantization noise exceeds it fall back to row
+  mode, which reproduces the quantized per-row values faithfully; the
+  homography engages only where it is genuinely sub-pixel exact (heavily
+  minified bands, exact affine frames, clean tables).
 
 ## Out of scope (deliberate)
 

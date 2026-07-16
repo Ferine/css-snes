@@ -103,3 +103,106 @@ function _solveLinear8(A, b) {
   }
   return h;
 }
+
+/**
+ * Fit the map→screen homography for the frame's mode-7 band.
+ *
+ * @param {Array|null} scanlineData - 224-entry per-scanline capture, or null
+ *   when there are no mode-7 scanlines (pure frame-affine case).
+ * @param {object} frameM7 - ppuState.mode7 (a b c d x y hoff voff largeField flipX flipY)
+ * @returns {{ok:boolean, maxError:number, matrix3d:string, h:number[], bandTop:number, bandBottom:number}|null}
+ *   null for sliver bands (1–7 rows) or singular solves; ok=false when the
+ *   validated error exceeds MAX_FIT_ERROR_PX or wrapping is required
+ *   (largeField false with endpoints outside the 1024×1024 map).
+ */
+export function fitMode7Homography(scanlineData, frameM7) {
+  const flipX = !!frameM7.flipX;
+  const flipY = !!frameM7.flipY;
+  const fm = frameMode7AsM7(frameM7);
+
+  const band = [];
+  if (scanlineData) {
+    for (let y = 0; y < 224; y++) {
+      const sd = scanlineData[y];
+      if (sd && sd.mode === 7 && typeof sd.mode7A === 'number') band.push(y);
+    }
+  }
+
+  let fitRows;   // two rows for the 4-point solve
+  let checkRows; // rows for validation
+  if (band.length === 0) {
+    // Pure frame-affine: synthesize sample rows from frame-end state.
+    fitRows = [{ y: 40, m: fm }, { y: 180, m: fm }];
+    checkRows = [{ y: 0, m: fm }, { y: 112, m: fm }, { y: 223, m: fm }];
+  } else if (band.length < MIN_BAND_ROWS) {
+    return null;
+  } else {
+    const y1 = band[(band.length * 0.25) | 0];
+    const y2 = band[(band.length * 0.75) | 0];
+    fitRows = [{ y: y1, m: scanlineData[y1] }, { y: y2, m: scanlineData[y2] }];
+    checkRows = [];
+    for (let i = 0; i < band.length; i += 8) {
+      checkRows.push({ y: band[i], m: scanlineData[band[i]] });
+    }
+    const last = band[band.length - 1];
+    if (checkRows[checkRows.length - 1].y !== last) {
+      checkRows.push({ y: last, m: scanlineData[last] });
+    }
+  }
+
+  // 4 correspondences at the row edges sx ∈ {0, 256}, row centers sy = y+0.5.
+  const points = [];
+  for (const { y, m } of fitRows) {
+    const rc = mode7RowCoords(y, m, flipX, flipY);
+    const sy = y + 0.5;
+    points.push({ mx: rc.mapX / 256, my: rc.mapY / 256, px: 0, py: sy });
+    points.push({
+      mx: (rc.mapX + 256 * rc.stepX) / 256,
+      my: (rc.mapY + 256 * rc.stepY) / 256,
+      px: 256, py: sy,
+    });
+  }
+  const raw = solveHomography(points);
+  if (!raw) return null;
+
+  // Round exactly as the emitted CSS will be parsed; validate the rounded H
+  // so formatting loss shows up in maxError instead of shipping silently.
+  const h = raw.map((v) => Number(v.toFixed(8)));
+
+  let maxError = 0;
+  let oob = false;
+  for (const { y, m } of checkRows) {
+    const rc = mode7RowCoords(y, m, flipX, flipY);
+    const sy = y + 0.5;
+    for (const sx of [0, 256]) {
+      const u = (rc.mapX + sx * rc.stepX) / 256;
+      const w = (rc.mapY + sx * rc.stepY) / 256;
+      if (u < 0 || u >= 1024 || w < 0 || w >= 1024) oob = true;
+      const den = h[6] * u + h[7] * w + 1;
+      if (Math.abs(den) < 1e-12) return null;
+      const px = (h[0] * u + h[1] * w + h[2]) / den;
+      const py = (h[3] * u + h[4] * w + h[5]) / den;
+      const err = Math.max(Math.abs(px - sx), Math.abs(py - sy));
+      if (err > maxError) maxError = err;
+    }
+  }
+
+  // A single plane cannot wrap; hardware wraps when largeField is false.
+  const wrapNeeded = !frameM7.largeField && oob;
+
+  const f = (v) => v.toFixed(8);
+  const matrix3d =
+    `matrix3d(${f(h[0])}, ${f(h[3])}, 0, ${f(h[6])}, ` +
+    `${f(h[1])}, ${f(h[4])}, 0, ${f(h[7])}, ` +
+    `0, 0, 1, 0, ` +
+    `${f(h[2])}, ${f(h[5])}, 0, 1)`;
+
+  return {
+    ok: maxError <= MAX_FIT_ERROR_PX && !wrapNeeded,
+    maxError,
+    matrix3d,
+    h,
+    bandTop: band.length ? band[0] : 0,
+    bandBottom: band.length ? band[band.length - 1] : 223,
+  };
+}
