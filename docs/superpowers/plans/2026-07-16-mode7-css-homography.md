@@ -40,7 +40,7 @@
   - `frameMode7AsM7(m7)` → converts `ppuState.mode7` field names (`a`, `b`, …, `hoff`, `voff`) to scanlineData field names.
   - `solveHomography(points)` → `number[8] | null`; `points` is exactly 4 of `{ mx, my, px, py }` (source map point → destination screen point); returns `[h11,h12,h13,h21,h22,h23,h31,h32]` with `h33 = 1`, or `null` if the system is singular.
 
-- [ ] **Step 1: Capture the row-mode baseline (BEFORE any code changes)**
+- [x] **Step 1: Capture the row-mode baseline (BEFORE any code changes)**
 
 Run (dev server is started by Playwright's config automatically):
 ```bash
@@ -48,7 +48,7 @@ cd /Users/x/dev/css-snes && M7_CSS_ONLY=1 pnpm test:e2e 2>&1 | tee "$TMPDIR/m7cs
 ```
 Expected: test passes; note the `[race-track] diff=NN.NN%` line. **Append the measured number to this plan file** at the bottom of Task 4 as a line `Row-mode baseline (measured): NN.NN%`. If the run does not reach mode 7 (`did not reach mode 7` in output), re-run once; if it still doesn't, record `baseline: not reached` and move on — Task 4 handles it.
 
-- [ ] **Step 2: Write the failing solver test**
+- [x] **Step 2: Write the failing solver test**
 
 Create `tests/unit/mode7-homography.test.js`:
 
@@ -93,12 +93,12 @@ describe('solveHomography', () => {
 });
 ```
 
-- [ ] **Step 3: Run test to verify it fails**
+- [x] **Step 3: Run test to verify it fails**
 
 Run: `cd /Users/x/dev/css-snes && pnpm vitest run tests/unit/mode7-homography.test.js`
 Expected: FAIL — cannot resolve `../../src/mode7-homography.js`.
 
-- [ ] **Step 4: Create the module**
+- [x] **Step 4: Create the module**
 
 Create `src/mode7-homography.js`:
 
@@ -210,12 +210,12 @@ function _solveLinear8(A, b) {
 }
 ```
 
-- [ ] **Step 5: Run the new test to verify it passes**
+- [x] **Step 5: Run the new test to verify it passes**
 
 Run: `cd /Users/x/dev/css-snes && pnpm vitest run tests/unit/mode7-homography.test.js`
 Expected: PASS (2 tests).
 
-- [ ] **Step 6: Move the layer's row math to the module**
+- [x] **Step 6: Move the layer's row math to the module**
 
 In `src/mode7-layer.js`:
 
@@ -235,12 +235,12 @@ export const __mode7Testables = {
 };
 ```
 
-- [ ] **Step 7: Run the full unit suite**
+- [x] **Step 7: Run the full unit suite**
 
 Run: `cd /Users/x/dev/css-snes && pnpm test`
 Expected: PASS — all existing suites, including `tests/unit/mode7-layer.test.js` (its `_mode7RowCoords` import now resolves to the moved function).
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 cd /Users/x/dev/css-snes && git add src/mode7-homography.js src/mode7-layer.js tests/unit/mode7-homography.test.js && git commit -m "Add mode7-homography module: row math + 4-point homography solver
@@ -266,7 +266,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
     - `null` return: band of 1–7 rows (sliver → row mode) or singular solve.
     - `ok: false`: fit validated worse than `MAX_FIT_ERROR_PX`, or wrap needed (`largeField` false with out-of-map endpoints).
 
-- [ ] **Step 1: Write the failing fit tests**
+- [x] **Step 1: Write the failing fit tests**
 
 Append to `tests/unit/mode7-homography.test.js` (add `fitMode7Homography` and `MAX_FIT_ERROR_PX` to the existing import from `../../src/mode7-homography.js`):
 
@@ -401,12 +401,12 @@ describe('fitMode7Homography', () => {
 });
 ```
 
-- [ ] **Step 2: Run tests to verify the new ones fail**
+- [x] **Step 2: Run tests to verify the new ones fail**
 
 Run: `cd /Users/x/dev/css-snes && pnpm vitest run tests/unit/mode7-homography.test.js`
 Expected: FAIL — `fitMode7Homography` is not exported.
 
-- [ ] **Step 3: Implement `fitMode7Homography`**
+- [x] **Step 3: Implement `fitMode7Homography`**
 
 Append to `src/mode7-homography.js`:
 
@@ -515,12 +515,12 @@ export function fitMode7Homography(scanlineData, frameM7) {
 }
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `cd /Users/x/dev/css-snes && pnpm vitest run tests/unit/mode7-homography.test.js`
 Expected: PASS (9 tests). If the *minified* hyperbolic test fails the gate, the fit code has a convention bug (mixed-up `sx` edges vs centers, or a missing `/256`) — do not loosen the assertion. The near-1:1 test failing in the `ok === true` direction means the gate got loosened — also a bug. `MAX_FIT_ERROR_PX` stays 1.0 (policy decision 2026-07-16: strict gate; integer-table noise near 1:1 magnification intentionally falls back to row mode).
 
-- [ ] **Step 5: Amend the spec's correspondence bullet**
+- [x] **Step 5: Amend the spec's correspondence bullet**
 
 In `docs/superpowers/specs/2026-07-16-mode7-css-homography-design.md`, replace the step-3 bullet under "Algorithm" ("**Correspondences.** For each sample row…" through "…mapped pixel center wherever the fit is exact.") with:
 
@@ -551,12 +551,12 @@ notes" section ("Expected residual on F-Zero race frames…") with:
   minified bands, exact affine frames, clean tables).
 ```
 
-- [ ] **Step 6: Run the full unit suite**
+- [x] **Step 6: Run the full unit suite**
 
 Run: `cd /Users/x/dev/css-snes && pnpm test`
 Expected: PASS, all suites.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 cd /Users/x/dev/css-snes && git add src/mode7-homography.js tests/unit/mode7-homography.test.js docs/superpowers/specs/2026-07-16-mode7-css-homography-design.md && git commit -m "Add fitMode7Homography: band fit, rounded-matrix validation, wrap rejection
@@ -577,7 +577,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 - Consumes: `fitMode7Homography(scanlineData, frameM7)` from Task 2 (already imported per Task 1's import line — extend it to `import { fitMode7Homography, frameMode7AsM7, mode7RowCoords } from './mode7-homography.js';`).
 - Produces (used by Task 4): `_perspEl.dataset.m7Css` set to `'homography'`, `'rows'`, or `'none'` every CSS-path frame. `.mode7-perspective` is the DOM hook (`document.querySelector('.mode7-perspective').dataset.m7Css`).
 
-- [ ] **Step 1: Extend the import and add homography state**
+- [x] **Step 1: Extend the import and add homography state**
 
 In `src/mode7-layer.js`, change the Task-1 import line to:
 
@@ -591,7 +591,7 @@ In the `Mode7Layer` constructor, after `this._tilemapFlushWaiters = [];` add:
     this._prevHomography = '';
 ```
 
-- [ ] **Step 2: Replace the CSS fallback branch of `update()`**
+- [x] **Step 2: Replace the CSS fallback branch of `update()`**
 
 Replace the entire `else` block of `update()` (currently starting at the comment `// CSS fallback path` and ending at `this._usedRowModeLastFrame = useRowMode;`) with:
 
@@ -670,7 +670,7 @@ Replace the entire `else` block of `update()` (currently starting at the comment
 
 Note what this removes relative to the old branch: the `useRowMode` flag, the old `repaintNeeded` term `!this._tilemapTextureReady` (that flag tracks the row-texture URL, not canvas contents; canvas contents are tracked by `_prevMapHash`/`_prevPalHash`, which start at `-1` so the first frame always repaints), and the old plane path (`_applyTransform` + `_applyScanlineClip` combination).
 
-- [ ] **Step 3: Delete the dead code**
+- [x] **Step 3: Delete the dead code**
 
 In `src/mode7-layer.js`, delete entirely:
 1. The `_applyTransform(m7)` method.
@@ -679,7 +679,7 @@ In `src/mode7-layer.js`, delete entirely:
 
 Keep `_clamp` (still used by `_renderCssRows`) and `_applyScanlineClip` (used by the homography path).
 
-- [ ] **Step 4: Verify no stale references and the plane CSS contract**
+- [x] **Step 4: Verify no stale references and the plane CSS contract**
 
 Run: `cd /Users/x/dev/css-snes && grep -n "_applyTransform\|_resolveTransformState\|_m7Fixed\|_mode7RowCoords(" src/*.js`
 Expected: no matches (the `__mode7Testables` alias line has no `(` so it does not match; nothing else may reference the deleted names).
@@ -687,12 +687,12 @@ Expected: no matches (the `__mode7Testables` alias line has no `(` so it does no
 Run: `cd /Users/x/dev/css-snes && grep -n "image-rendering\|transform-origin" styles/snes-layers.css | grep -A0 -B0 mode7 ; grep -n "image-rendering: pixelated\|transform-origin: 0 0" styles/snes-layers.css`
 Expected: `.mode7-plane` block (around lines 173–182) contains both `image-rendering: pixelated` and `transform-origin: 0 0` — the homography path relies on the class for both; do not set them inline. (Verified present at plan time; this step guards against drift.)
 
-- [ ] **Step 5: Run unit suite and build**
+- [x] **Step 5: Run unit suite and build**
 
 Run: `cd /Users/x/dev/css-snes && pnpm test && pnpm build`
 Expected: all unit tests PASS; Vite build completes with 0 errors.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 cd /Users/x/dev/css-snes && git add src/mode7-layer.js && git commit -m "Mode7Layer: fitted-homography CSS path, rows as fallback
@@ -715,7 +715,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 **Interfaces:**
 - Consumes: `_perspEl.dataset.m7Css` from Task 3; existing harness `setMode7CssOnly(on)`; existing `M7_CSS_ONLY=1` env plumbing in the spec (line ~69).
 
-- [ ] **Step 1: Add the harness getter**
+- [x] **Step 1: Add the harness getter**
 
 In `tests/e2e/test-harness.js`, in the `window.testHarness` object, directly after the `setMode7CssOnly(on) { ... }` entry, add:
 
@@ -726,7 +726,7 @@ In `tests/e2e/test-harness.js`, in the `window.testHarness` object, directly aft
   },
 ```
 
-- [ ] **Step 2: Capture the CSS path at the race checkpoint**
+- [x] **Step 2: Capture the CSS path at the race checkpoint**
 
 In `tests/e2e/fzero.spec.js`, immediately after the line `checkpoints.push(await capture(page, 'race-track'));`, add:
 
@@ -736,7 +736,7 @@ In `tests/e2e/fzero.spec.js`, immediately after the line `checkpoints.push(await
     : null;
 ```
 
-- [ ] **Step 3: Add the assertions**
+- [x] **Step 3: Add the assertions**
 
 In the assertion section near the end (after the existing `if (hasM7) { ... }` block that asserts `raceCheckpoint.diffPercent < 30`), add:
 
@@ -754,28 +754,28 @@ frames near 1:1 magnification are expected to report `rows` — that is correct
 behavior, not a failure. `homography` at the race checkpoint would mean the
 frame's table validated sub-pixel.
 
-- [ ] **Step 4: Run E2E in CSS-only mode**
+- [x] **Step 4: Run E2E in CSS-only mode**
 
 Run: `cd /Users/x/dev/css-snes && M7_CSS_ONLY=1 pnpm test:e2e 2>&1 | tee "$TMPDIR/m7css-homography.log" | grep -E "M7 CSS path|race-track|diff"`
 Expected: PASS; `M7 CSS path at race: homography`; note the race diff%.
 
-- [ ] **Step 5: Compare against the Task 1 baseline and pin the threshold**
+- [x] **Step 5: Compare against the Task 1 baseline and pin the threshold**
 
 Compare the new race diff% against the `Row-mode baseline (measured)` line recorded at the bottom of this task (36.71%). Requirements, by which path activated:
 - **`rows` at the race checkpoint (expected under the strict gate):** the diff must be within ±3 points of the baseline (the row path is unchanged code). Pin the Step-3 threshold to `Math.ceil(baseline + 3)` (36.71 → `toBeLessThan(40)`). A diff far from baseline means Task 3's branch restructure broke the row path — STOP and investigate.
 - **`homography` at the race checkpoint:** the diff must be strictly lower than the baseline; if not, STOP and investigate (coordinate-convention bug). Pin the threshold to `Math.ceil(newDiff + 5)`.
 - If Task 1 recorded `baseline: not reached`, keep `40` and note that here.
 
-- [ ] **Step 6: Run the normal (non-CSS-only) E2E to confirm no regression**
+- [x] **Step 6: Run the normal (non-CSS-only) E2E to confirm no regression**
 
 Run: `cd /Users/x/dev/css-snes && pnpm test:e2e 2>&1 | grep -E "race-track|diff|passed|failed"`
 Expected: PASS with race diff in line with the pre-change numbers (~19.6%) — the default compositor path is untouched by this plan.
 
-- [ ] **Step 7: Record perf snapshot (informational, not asserted)**
+- [x] **Step 7: Record perf snapshot (informational, not asserted)**
 
 With `pnpm dev` running, load the ROM in a browser, toggle M7 CSS on, and note `renderer.getPerfSnapshot()` layers-stage mean from the console, or skip if no browser available and note that. Append the observation below.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 cd /Users/x/dev/css-snes && git add tests/e2e/test-harness.js tests/e2e/fzero.spec.js docs/superpowers/plans/2026-07-16-mode7-css-homography.md && git commit -m "E2E: assert fitted homography active and pin CSS-mode race diff
