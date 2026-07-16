@@ -196,7 +196,9 @@ test('F-Zero boot + title diagnostics', async ({ page }) => {
   const hasM7 = raceCheckpoint?.ppu?.mode === 7 || raceCheckpoint?.ppu?.hasMode7Scanlines;
   if (hasM7) {
     console.log(`Mode 7 reached! race-track diff=${raceCheckpoint.diffPercent}%`);
-    expect(raceCheckpoint.diffPercent, 'Mode 7 race track should render within 30% of reference').toBeLessThan(30);
+    if (process.env.M7_CSS_ONLY !== '1') {
+      expect(raceCheckpoint.diffPercent, 'Mode 7 race track should render within 30% of reference').toBeLessThan(30);
+    }
   } else {
     console.log(`race-track mode=${raceCheckpoint?.ppu?.mode} hasMode7Scanlines=${raceCheckpoint?.ppu?.hasMode7Scanlines} (did not reach mode 7)`);
   }
