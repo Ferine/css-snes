@@ -124,7 +124,7 @@ export function fitMode7Homography(scanlineData, frameM7) {
   if (scanlineData) {
     for (let y = 0; y < 224; y++) {
       const sd = scanlineData[y];
-      if (sd && sd.mode === 7 && typeof sd.mode7A === 'number') band.push(y);
+      if (sd && sd.mode === 7 && Number.isFinite(sd.mode7A)) band.push(y);
     }
   }
 
@@ -183,6 +183,7 @@ export function fitMode7Homography(scanlineData, frameM7) {
       const px = (h[0] * u + h[1] * w + h[2]) / den;
       const py = (h[3] * u + h[4] * w + h[5]) / den;
       const err = Math.max(Math.abs(px - sx), Math.abs(py - sy));
+      if (!Number.isFinite(err)) return null;
       if (err > maxError) maxError = err;
     }
   }

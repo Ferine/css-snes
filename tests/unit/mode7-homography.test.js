@@ -151,6 +151,26 @@ describe('fitMode7Homography', () => {
     expect(fit.bandBottom).toBe(223);
   });
 
+  it('fits a band of exactly MIN_BAND_ROWS rows', () => {
+    const sd = makeScanlineData(100, 107, constantAffineRow);
+    const fit = fitMode7Homography(sd, AFFINE_FRAME_M7);
+    expect(fit).not.toBeNull();
+    expect(fit.ok).toBe(true);
+    expect(fit.bandTop).toBe(100);
+    expect(fit.bandBottom).toBe(107);
+  });
+
+  it('fails closed when per-row params are non-finite', () => {
+    // mode7A stays finite so rows pass the band scan. Note: mode7Hoff/Voff/X/Y
+    // feed only into bitwise-masked terms in mode7RowCoords (`& 0x3ff`, `<< 8`,
+    // etc.), and JS's ToInt32 coercion silently turns NaN into 0 there, so a
+    // NaN in those fields never reaches the output. mode7C (like mode7D) is
+    // also used unmasked via stepY/lineStartY and does propagate NaN through
+    // to the fitted error — that's what the new validation guard must catch.
+    const sd = makeScanlineData(0, 223, (y) => ({ ...constantAffineRow(), mode7C: NaN }));
+    expect(fitMode7Homography(sd, AFFINE_FRAME_M7)).toBeNull();
+  });
+
   it('rejects out-of-map bands when largeField is false (hardware wraps)', () => {
     // A = 1024 → u(256) = 256·1024/256 = 1024: right edge leaves [0, 1024).
     const oobRow = () => ({
