@@ -67,8 +67,10 @@ Algorithm:
    and validate using the *rounded* matrix (what the browser will actually parse):
    project the endpoints of every 8th band row — always including the first and last band
    rows — through H and compare against expected screen points.
-   `ok = maxError <= 1.0` (CSS px). The per-row `& ~63` truncation stays well inside
-   this budget; genuinely non-projective HDMA tables (wavy effects, split-screen) fail it.
+   `ok = maxError <= 1.0` (CSS px). Two things can exceed the gate: genuinely
+   non-projective HDMA tables (wavy effects, split-screen; errors ≥10px), and
+   integer-quantization noise near 1:1 magnification (~1.4–1.6px — see the
+   Precision notes for the deliberate policy on that case).
 6. **Emit** `matrix3d(h11,h21,0,h31, h12,h22,0,h32, 0,0,1,0, h13,h23,0,1)` — the 3×3
    homography embedded in a 4×4 with identity z, column-major CSS order, for use with
    `transform-origin: 0 0`.
