@@ -740,6 +740,6 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 ```
 
 **Measured numbers (executor fills in during Tasks 1 and 4):**
-- Row-mode baseline (measured): _run Task 1 Step 1 and record here_
+- Row-mode baseline (measured): 36.71%
 - Homography race diff (measured): _run Task 4 Step 4 and record here_
 - Perf note: _Task 4 Step 7_

@@ -12,6 +12,7 @@
  *   vram[tileY*128 + tileX] & 0xff         → tile index (low byte)
  *   (vram[tileIdx*64 + py*8 + px] >> 8) & 0xff → pixel color (high byte)
  */
+import { frameMode7AsM7, mode7RowCoords } from './mode7-homography.js';
 import { Mode7VRAMCache } from './mode7-vram-cache.js';
 
 export class Mode7Layer {
@@ -414,7 +415,7 @@ export class Mode7Layer {
       const sd = scanlineData[y];
       if (!sd || sd.mode !== 7) continue;
       const m = sd.mode7A != null ? sd : fallbackM7;
-      rowInfo[y] = _mode7RowCoords(y, m, flipX, flipY);
+      rowInfo[y] = mode7RowCoords(y, m, flipX, flipY);
     }
 
     let slotIndex = 0;
@@ -564,14 +565,6 @@ export class Mode7Layer {
   }
 }
 
-/** Convert frame-end mode7 state to the same field names as scanlineData entries */
-function frameMode7AsM7(m7) {
-  return {
-    mode7A: m7.a, mode7B: m7.b, mode7C: m7.c, mode7D: m7.d,
-    mode7X: m7.x, mode7Y: m7.y, mode7Hoff: m7.hoff, mode7Voff: m7.voff,
-  };
-}
-
 function _m7Fixed(raw) {
   const signed = raw > 0x7fff ? raw - 0x10000 : raw;
   return signed / 256;
@@ -644,32 +637,6 @@ function _clamp(v, lo, hi) {
   return v < lo ? lo : (v > hi ? hi : v);
 }
 
-function _mode7RowCoords(y, m, flipX, flipY) {
-  const yPos = y + 1;
-  const rY = flipY ? 255 - yPos : yPos;
-
-  let clH = m.mode7Hoff - m.mode7X;
-  clH = (clH & 0x2000) > 0 ? (clH | ~0x3ff) : (clH & 0x3ff);
-  let clV = m.mode7Voff - m.mode7Y;
-  clV = (clV & 0x2000) > 0 ? (clV | ~0x3ff) : (clV & 0x3ff);
-
-  const lineStartX = ((m.mode7A * clH) & ~63)
-                   + ((m.mode7B * rY)  & ~63)
-                   + ((m.mode7B * clV) & ~63)
-                   + (m.mode7X << 8);
-  const lineStartY = ((m.mode7C * clH) & ~63)
-                   + ((m.mode7D * rY)  & ~63)
-                   + ((m.mode7D * clV) & ~63)
-                   + (m.mode7Y << 8);
-
-  const mapX = flipX ? lineStartX + 255 * m.mode7A : lineStartX;
-  const mapY = flipX ? lineStartY + 255 * m.mode7C : lineStartY;
-  const stepX = flipX ? -m.mode7A : m.mode7A;
-  const stepY = flipX ? -m.mode7C : m.mode7C;
-
-  return { mapX, mapY, stepX, stepY };
-}
-
 function _wrapMapCoord(value, size) {
   return ((value % size) + size) % size;
 }
@@ -683,6 +650,6 @@ function _segmentHeightForVisibleOffset(offset) {
 
 export const __mode7Testables = {
   _hashMode7Palette,
-  _mode7RowCoords,
+  _mode7RowCoords: mode7RowCoords,
   _packPalette32,
 };
