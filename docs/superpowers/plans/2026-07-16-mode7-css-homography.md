@@ -312,10 +312,12 @@ describe('fitMode7Homography', () => {
     expect(fit.matrix3d).toMatch(/^matrix3d\(/);
   });
 
-  it('fits an F-Zero-like hyperbolic perspective band within tolerance', () => {
+  it('accepts an integer HDMA hyperbolic table when minification keeps noise low', () => {
     // A(y) = D(y) = round(k / (yPos + horizon)) — a true ground-plane
-    // progression, integer-rounded like a real HDMA table.
-    const k = 86400, horizon = 64;
+    // progression, integer-rounded like a real HDMA table. Heavy
+    // minification (A ≈ 3000–5400): ±0.5 rounding on A/D costs ~256/A
+    // screen px per texel, far under the gate.
+    const k = 864000, horizon = 64;
     const sd = makeScanlineData(96, 223, (y) => {
       const scale = Math.round(k / (y + 1 + horizon));
       return {
@@ -332,6 +334,28 @@ describe('fitMode7Homography', () => {
     // Genuine perspective ⇒ y-dependent divisor present.
     expect(Math.abs(fit.h[7])).toBeGreaterThan(1e-7);
     expect(fit.bandTop).toBe(96);
+  });
+
+  it('rejects an integer HDMA table near 1:1 magnification (noise above the strict gate)', () => {
+    // Same progression at A ≈ 300–540: integer-rounding noise floor is
+    // ~1.4–1.6px, above the deliberately strict 1.0px gate (policy
+    // decision 2026-07-16). Such frames fall back to row mode, which
+    // reproduces the quantized per-row values faithfully.
+    const k = 86400, horizon = 64;
+    const sd = makeScanlineData(96, 223, (y) => {
+      const scale = Math.round(k / (y + 1 + horizon));
+      return {
+        mode7A: scale, mode7B: 0, mode7C: 0, mode7D: scale,
+        mode7X: 0, mode7Y: 0, mode7Hoff: 0, mode7Voff: 0,
+      };
+    });
+    const fit = fitMode7Homography(sd, AFFINE_FRAME_M7);
+    expect(fit).not.toBeNull();
+    expect(fit.ok).toBe(false);
+    expect(fit.maxError).toBeGreaterThan(MAX_FIT_ERROR_PX);
+    // Quantization noise, not non-projective structure: nowhere near
+    // the ≥10px errors that wavy/split-screen HDMA produces.
+    expect(fit.maxError).toBeLessThan(4);
   });
 
   it('rejects a non-projective (sinusoidal) band', () => {
@@ -494,7 +518,7 @@ export function fitMode7Homography(scanlineData, frameM7) {
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `cd /Users/x/dev/css-snes && pnpm vitest run tests/unit/mode7-homography.test.js`
-Expected: PASS (8 tests). If the hyperbolic test's `maxError` exceeds 1.0, the fit code has a convention bug (mixed-up `sx` edges vs centers, or a missing `/256`) — do not loosen the assertion.
+Expected: PASS (9 tests). If the *minified* hyperbolic test fails the gate, the fit code has a convention bug (mixed-up `sx` edges vs centers, or a missing `/256`) — do not loosen the assertion. The near-1:1 test failing in the `ok === true` direction means the gate got loosened — also a bug. `MAX_FIT_ERROR_PX` stays 1.0 (policy decision 2026-07-16: strict gate; integer-table noise near 1:1 magnification intentionally falls back to row mode).
 
 - [ ] **Step 5: Amend the spec's correspondence bullet**
 
@@ -511,6 +535,20 @@ In `docs/superpowers/specs/2026-07-16-mode7-css-homography-design.md`, replace t
    a single plane cannot wrap, so the fit returns `ok: false` when
    `largeField` is false and any validated endpoint leaves `[0, 1024)`
    (row mode wraps correctly via `background-repeat`).
+```
+
+Additionally, in the same spec file, replace the last bullet of the "Precision
+notes" section ("Expected residual on F-Zero race frames…") with:
+
+```markdown
+- Integer HDMA tables carry a quantization noise floor: ±0.5 rounding on the
+  per-row A/D values costs ~`256/A` screen px per texel, amplified ~2× by
+  fit-row leverage. Near 1:1 magnification (A ≈ 256–540) the floor is
+  ~1.4–1.6px — above the gate. **Policy decision (2026-07-16): the gate stays
+  at 1.0px.** Frames whose quantization noise exceeds it fall back to row
+  mode, which reproduces the quantized per-row values faithfully; the
+  homography engages only where it is genuinely sub-pixel exact (heavily
+  minified bands, exact affine frames, clean tables).
 ```
 
 - [ ] **Step 6: Run the full unit suite**
@@ -705,10 +743,16 @@ In the assertion section near the end (after the existing `if (hasM7) { ... }` b
 ```js
   if (hasM7 && m7CssPathAtRace !== null) {
     console.log(`M7 CSS path at race: ${m7CssPathAtRace} diff=${raceCheckpoint.diffPercent}%`);
-    expect(m7CssPathAtRace, 'race frames should use the fitted homography').toBe('homography');
-    expect(raceCheckpoint.diffPercent, 'CSS-only mode 7 race diff').toBeLessThan(30);
+    expect(['homography', 'rows'], 'CSS mode-7 race frames must use a CSS sub-mode')
+      .toContain(m7CssPathAtRace);
+    expect(raceCheckpoint.diffPercent, 'CSS-only mode 7 race diff').toBeLessThan(40);
   }
 ```
+
+Under the strict 1.0px gate (policy decision 2026-07-16), real F-Zero race
+frames near 1:1 magnification are expected to report `rows` — that is correct
+behavior, not a failure. `homography` at the race checkpoint would mean the
+frame's table validated sub-pixel.
 
 - [ ] **Step 4: Run E2E in CSS-only mode**
 
@@ -717,10 +761,10 @@ Expected: PASS; `M7 CSS path at race: homography`; note the race diff%.
 
 - [ ] **Step 5: Compare against the Task 1 baseline and pin the threshold**
 
-Compare the new race diff% against the `Row-mode baseline (measured)` line recorded at the bottom of this task. Requirements:
-- New diff must be strictly lower than the baseline. If it is not, STOP — do not tighten or loosen anything; investigate (most likely a coordinate-convention bug in the fit) before proceeding.
-- Replace the `30` in the Step-3 assertion with `Math.ceil(newDiff + 5)` (e.g. measured 17.3% → `toBeLessThan(23)`), so regressions are caught while normal run-to-run variance passes.
-- If Task 1 recorded `baseline: not reached`, keep `30` and note that here.
+Compare the new race diff% against the `Row-mode baseline (measured)` line recorded at the bottom of this task (36.71%). Requirements, by which path activated:
+- **`rows` at the race checkpoint (expected under the strict gate):** the diff must be within ±3 points of the baseline (the row path is unchanged code). Pin the Step-3 threshold to `Math.ceil(baseline + 3)` (36.71 → `toBeLessThan(40)`). A diff far from baseline means Task 3's branch restructure broke the row path — STOP and investigate.
+- **`homography` at the race checkpoint:** the diff must be strictly lower than the baseline; if not, STOP and investigate (coordinate-convention bug). Pin the threshold to `Math.ceil(newDiff + 5)`.
+- If Task 1 recorded `baseline: not reached`, keep `40` and note that here.
 
 - [ ] **Step 6: Run the normal (non-CSS-only) E2E to confirm no regression**
 
@@ -741,5 +785,5 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 
 **Measured numbers (executor fills in during Tasks 1 and 4):**
 - Row-mode baseline (measured): 36.71%
-- Homography race diff (measured): _run Task 4 Step 4 and record here_
-- Perf note: _Task 4 Step 7_
+- CSS-path race diff (measured, path=rows): 36.71% — `M7 CSS path at race: rows diff=36.71%`. Exact match to the row-mode baseline (0-point deviation), confirming the strict 1.0px fit gate correctly falls back to row mode for this real F-Zero race frame near 1:1 magnification (expected/correct per policy decision 2026-07-16). Step-3 threshold pinned to `Math.ceil(36.71 + 3) = 40` per the `rows`-path rule.
+- Perf note: `renderer.getPerfSnapshot()` captured via Playwright automation (M7_CSS_ONLY=1, up through the race-track checkpoint, 240 samples): `renderPath: "hybrid-css-mode7"`; layers-stage mean = 0.581ms (p50 1.3ms, p95 1.4ms, max 11.6ms). renderFrame mean = 2.093ms, tileCache mean = 1.662ms. No live interactive browser was available in this environment; this snapshot was obtained by temporarily instrumenting the harness (not committed) and driving it headlessly through Playwright, then reverting the instrumentation before commit.

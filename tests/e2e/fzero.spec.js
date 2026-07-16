@@ -117,6 +117,10 @@ test('F-Zero boot + title diagnostics', async ({ page }) => {
   await page.evaluate(() => window.testHarness.stepFrames(360));
   checkpoints.push(await capture(page, 'race-track'));
 
+  const m7CssPathAtRace = process.env.M7_CSS_ONLY === '1'
+    ? await page.evaluate(() => window.testHarness.getM7CssPath())
+    : null;
+
   if (process.env.LAYER_SWEEP === '1') {
     const keys = ['bg0', 'bg1', 'bg2', 'bg3', 'sprites'];
     const sweep = [];
@@ -195,5 +199,12 @@ test('F-Zero boot + title diagnostics', async ({ page }) => {
     expect(raceCheckpoint.diffPercent, 'Mode 7 race track should render within 30% of reference').toBeLessThan(30);
   } else {
     console.log(`race-track mode=${raceCheckpoint?.ppu?.mode} hasMode7Scanlines=${raceCheckpoint?.ppu?.hasMode7Scanlines} (did not reach mode 7)`);
+  }
+
+  if (hasM7 && m7CssPathAtRace !== null) {
+    console.log(`M7 CSS path at race: ${m7CssPathAtRace} diff=${raceCheckpoint.diffPercent}%`);
+    expect(['homography', 'rows'], 'CSS mode-7 race frames must use a CSS sub-mode')
+      .toContain(m7CssPathAtRace);
+    expect(raceCheckpoint.diffPercent, 'CSS-only mode 7 race diff').toBeLessThan(40);
   }
 });

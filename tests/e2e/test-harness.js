@@ -106,6 +106,10 @@ window.testHarness = {
   buttonDown(btn) { if (snes) snes.setPad1ButtonPressed(btn); },
   buttonUp(btn)   { if (snes) snes.setPad1ButtonReleased(btn); },
   setMode7CssOnly(on) { if (renderer) renderer.setMode7CssOnly(!!on); },
+  getM7CssPath() {
+    const el = document.querySelector('.mode7-perspective');
+    return el?.dataset?.m7Css ?? '';
+  },
   setLayerVisibility(vis) {
     if (!renderer) return;
     for (const k of ['bg0', 'bg1', 'bg2', 'bg3', 'sprites']) {
